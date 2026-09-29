@@ -1,7 +1,7 @@
 import { createServer as createNodeServer } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createServer as createMcpServer } from '../server.js';
-import { trustForwardedUser } from '../intempus/policy.js';
+import { parseRoles, rolesFromGateway, trustForwardedUser } from '../intempus/policy.js';
 import {
   assertAllowedOrigin,
   assertAuthorized,
@@ -50,7 +50,18 @@ const httpServer = createNodeServer(async (req, res) => {
       throw new HttpRequestError(401, 'Missing X-MCP-User from the gateway');
     }
 
-    const mcpServer = createMcpServer({ onBehalfOf: forwardedUser });
+    // INTEMPUS_PROFILE=roles: one endpoint for everyone; the gateway maps the
+    // user's Entra groups to role names (X-MCP-Roles) and the tools offered
+    // are the union of those roles. Without a trusted gateway, no roles.
+    let roles;
+    if (rolesFromGateway()) {
+      roles = trustForwardedUser() ? parseRoles(firstHeaderValue(req.headers['x-mcp-roles'])) : [];
+      if (roles.length === 0) {
+        throw new HttpRequestError(403, 'No Intempus role for this user (X-MCP-Roles from the gateway)');
+      }
+    }
+
+    const mcpServer = createMcpServer({ onBehalfOf: forwardedUser, roles });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });

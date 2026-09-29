@@ -26,7 +26,7 @@ import {
   verifyPreparedOperation,
   type PreparedOperation,
 } from '../intempus/operations.js';
-import { assertWritesEnabled, checkToolPolicy, profile, toolNamesForProfile } from '../intempus/policy.js';
+import { assertWritesEnabled, checkToolPolicy, configuredRoles, toolNamesFor, type IntempusRole } from '../intempus/policy.js';
 import {
   assertEditableBySelf,
   createOrUpdate,
@@ -56,6 +56,8 @@ import { ApproverScope } from '../intempus/scope.js';
 export interface RegisterOptions {
   /** Gateway-verified UPN of the requesting user. */
   onBehalfOf?: string;
+  /** The user's roles (from X-MCP-Roles via the gateway); defaults to the configured roles. */
+  roles?: readonly IntempusRole[];
 }
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD');
@@ -78,15 +80,17 @@ const timeFields = {
 };
 
 export function registerIntempusTools(server: McpServer, client: IntempusClient, options: RegisterOptions = {}): void {
-  const available = toolNamesForProfile();
-  const current = profile();
+  const roles = options.roles ?? configuredRoles();
+  const available = toolNamesFor(roles);
+  const isAdmin = roles.includes('admin');
+  const isApprover = roles.includes('approver');
   const actingAs = options.onBehalfOf ?? '(no forwarded identity)';
 
   let selfPromise: Promise<ResolvedEmployee> | undefined;
   const self = (): Promise<ResolvedEmployee> => {
     if (!options.onBehalfOf) {
       return Promise.reject(
-        new Error('No requesting user identity available. This profile requires the gateway to forward the verified user (X-MCP-User).'),
+        new Error('No requesting user identity available. This tool requires the gateway to forward the verified user (X-MCP-User).'),
       );
     }
     selfPromise ??= resolveEmployee(client, options.onBehalfOf);
@@ -107,7 +111,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
   };
 
   const audited = <T>(tool: string, input: unknown, call: () => Promise<T>, extra?: { operationHash?: string }) =>
-    run(tool, { actingAs, profile: current, ...extra }, input, call);
+    run(tool, { actingAs, roles, ...extra }, input, call);
 
   // ------------------------------------------------------------ common
 
@@ -130,22 +134,22 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
     'intempus_whoami',
     {
       title: 'Who Am I (Intempus)',
-      description: 'Show this endpoint\'s profile and the Intempus employee (and approver levels) the session is bound to.',
+      description: 'Show your roles here (employee/approver/admin, from your Entra groups) and the Intempus employee (and approver levels) you are linked to.',
       inputSchema: {},
       annotations: READ_TOOL_ANNOTATIONS,
     },
     async input =>
       audited('intempus_whoami', input, async () => {
-        const result: Record<string, unknown> = { profile: current, actingAs };
+        const result: Record<string, unknown> = { roles, actingAs };
         try {
           const me = await self();
           result.employee = { id: me.employeeId, number: me.number, name: me.name, matchedBy: me.matchedBy };
-          if (current === 'approver') {
+          if (isApprover) {
             const snapshot = await (await scope()).load();
             result.approver = snapshot;
           }
         } catch (error) {
-          if (current !== 'admin') throw error;
+          if (!isAdmin) throw error;
           result.employee = null;
           result.note = `Not linked to an Intempus employee (${formatUnknownError(error)}). Admin tools work regardless.`;
         }
@@ -167,7 +171,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
     },
     async input =>
       audited('intempus_list_cases', input, async () =>
-        jsonResult(await listCases(client, { ...input, includeInactive: current === 'admin' && input.includeInactive === true })),
+        jsonResult(await listCases(client, { ...input, includeInactive: isAdmin && input.includeInactive === true })),
       ),
   );
 
@@ -187,11 +191,17 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
     async input =>
       audited('intempus_list_work_types', input, async () => {
         let workModelIds: number[] | undefined;
-        if (current === 'admin') {
-          if (input.workModelId) workModelIds = [input.workModelId];
-          else if (input.employeeId) workModelIds = currentWorkModels(contractsOf(await client.get<IntempusObject>(`employee/${input.employeeId}/`)));
-        } else {
-          workModelIds = currentWorkModels((await self()).contracts);
+        if (isAdmin && input.workModelId) {
+          workModelIds = [input.workModelId];
+        } else if (isAdmin && input.employeeId) {
+          workModelIds = currentWorkModels(contractsOf(await client.get<IntempusObject>(`employee/${input.employeeId}/`)));
+        } else if (roles.includes('employee') || isApprover) {
+          // Your own work model; an admin who is not linked to an employee gets all types.
+          try {
+            workModelIds = currentWorkModels((await self()).contracts);
+          } catch (error) {
+            if (!isAdmin) throw error;
+          }
         }
         return jsonResult(await listWorkTypes(client, { workModelIds, query: input.query }));
       }),
@@ -1238,13 +1248,13 @@ function partial<T extends Record<string, z.ZodType>>(shape: T): { [K in keyof T
 
 async function run<T>(
   tool: string,
-  context: { actingAs: string; profile: string; operationHash?: string },
+  context: { actingAs: string; roles: readonly IntempusRole[]; operationHash?: string },
   input: unknown,
   call: () => Promise<T>,
 ): Promise<T> {
-  const policy = checkToolPolicy(tool);
+  const policy = checkToolPolicy(tool, context.roles);
   const target = auditTarget(input);
-  const base = { tool, actingAs: context.actingAs, profile: context.profile, operationHash: context.operationHash };
+  const base = { tool, actingAs: context.actingAs, profile: context.roles.join('+'), operationHash: context.operationHash };
 
   if (!policy.allowed) {
     await writeAuditEvent({ ...base, action: 'policy_denied', target, reason: policy.reason });
