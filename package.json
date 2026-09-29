@@ -1,0 +1,68 @@
+{
+  "name": "mcp-server-intempus",
+  "version": "0.1.0",
+  "description": "MCP server for Visma Intempus (time registration, approval, balances, cases, planning) with employee, approver and admin profiles.",
+  "type": "module",
+  "main": "./dist/stdio.js",
+  "exports": {
+    ".": "./dist/stdio.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    ".env.example"
+  ],
+  "bin": {
+    "mcp-server-intempus": "./dist/stdio.js"
+  },
+  "scripts": {
+    "build": "tsup src/transports/stdio.ts src/transports/http.ts --format esm --dts --clean --sourcemap",
+    "dev": "tsx src/transports/stdio.ts",
+    "dev:http": "tsx src/transports/http.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepare": "npm run build",
+    "prepack": "npm run typecheck && npm test && npm run build",
+    "smoke:live": "tsx test/live-smoke.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/borgels/mcp-server-intempus.git"
+  },
+  "keywords": [
+    "mcp",
+    "intempus",
+    "visma",
+    "time-tracking",
+    "timeregistrering",
+    "approval"
+  ],
+  "author": "",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "bugs": {
+    "url": "https://github.com/borgels/mcp-server-intempus/issues"
+  },
+  "homepage": "https://github.com/borgels/mcp-server-intempus#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "overrides": {
+    "ip-address": ">=10.1.1",
+    "hono": ">=4.12.25",
+    "fast-uri": ">=3.1.2",
+    "qs": ">=6.15.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "tsup": "^8.5.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}
