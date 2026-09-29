@@ -1,19 +1,18 @@
 /**
- * One image, three profiles — selected by INTEMPUS_PROFILE, each deployed
- * on its own hostname behind its own Entra security group:
+ * One server, three roles. A user may hold several; the tools offered are
+ * the union of the user's roles.
  *
- *  - "employee" (default): self-service, hard-scoped to the requesting
- *    user's OWN Intempus employee. The gateway forwards the verified UPN
- *    (X-MCP-User); the server resolves it to an employee and pins every
- *    tool to that id. The API key is a single admin-level Intempus user,
- *    so this scoping is enforced HERE — employee tools never accept
- *    foreign employee ids.
+ *  - "employee": self-service, hard-scoped to the requesting user's OWN
+ *    Intempus employee. The gateway forwards the verified UPN (X-MCP-User);
+ *    the server resolves it to an employee and pins every tool to that id.
+ *    The API key is a single admin-level Intempus user, so this scoping is
+ *    enforced HERE — employee tools never accept foreign employee ids.
  *
- *  - "approver": the employee tools plus a read-only view of the team the
- *    user is responsible for in Intempus (responsible_for_employee /
- *    _department / _case): pending time, balances, planning. Approving
- *    stays in Intempus — the public API cannot approve (verified
- *    2026-09-29: `approved` is read-only and approved_by_* do not approve).
+ *  - "approver": a read-only view of the team the user is responsible for
+ *    in Intempus (responsible_for_employee / _department / _case): pending
+ *    time, balances, planning. Approving stays in Intempus — the public API
+ *    cannot approve (verified 2026-09-29: `approved` is read-only and
+ *    approved_by_* do not approve).
  *
  *  - "admin": company-wide — employees, contracts, access, responsibility,
  *    time for anyone, cases, customers, balances and planning.
@@ -21,13 +20,35 @@
  *    intempus_prepare_admin_change → intempus_commit_prepared_operation;
  *    the gateway can additionally gate the commit tool with a duty group.
  *
- * Writes in every profile require INTEMPUS_ENABLE_WRITES=true on top.
+ * Where roles come from (INTEMPUS_PROFILE):
+ *  - "roles": per request from X-MCP-Roles, which the gateway derives from
+ *    the user's Entra security groups (hosts.json `roles`). Honored only
+ *    together with INTEMPUS_TRUST_FORWARDED_USER=true; none → nothing.
+ *  - a fixed role or comma list ("employee", "admin", "employee,approver"):
+ *    the same roles for every request (stdio, single-purpose instances).
+ *    Default "employee".
+ *
+ * Writes require INTEMPUS_ENABLE_WRITES=true on top.
  */
-export type IntempusProfile = 'employee' | 'approver' | 'admin';
+export const ROLES = ['employee', 'approver', 'admin'] as const;
+export type IntempusRole = (typeof ROLES)[number];
 
-export function profile(): IntempusProfile {
-  const value = process.env.INTEMPUS_PROFILE;
-  return value === 'admin' || value === 'approver' ? value : 'employee';
+/** True when roles come per request from the gateway (INTEMPUS_PROFILE=roles). */
+export function rolesFromGateway(): boolean {
+  return process.env.INTEMPUS_PROFILE === 'roles';
+}
+
+/** Parse a comma-separated role list, keeping only known roles, in canonical order. */
+export function parseRoles(value: string | undefined): IntempusRole[] {
+  const wanted = new Set((value ?? '').split(',').map(part => part.trim().toLowerCase()));
+  return ROLES.filter(role => wanted.has(role));
+}
+
+/** Roles fixed by configuration (when not taken from the gateway). */
+export function configuredRoles(): IntempusRole[] {
+  if (rolesFromGateway()) return [];
+  const roles = parseRoles(process.env.INTEMPUS_PROFILE ?? 'employee');
+  return roles.length > 0 ? roles : ['employee'];
 }
 
 export function trustForwardedUser(): boolean {
@@ -103,13 +124,13 @@ const ADMIN_ONLY_TOOLS = [
   'intempus_commit_prepared_operation',
 ];
 
-const PROFILE_TOOLS: Record<IntempusProfile, Set<string>> = {
-  employee: new Set([...COMMON_TOOLS, ...SELF_TOOLS]),
-  approver: new Set([...COMMON_TOOLS, ...SELF_TOOLS, ...APPROVAL_TOOLS]),
-  admin: new Set([...COMMON_TOOLS, ...ADMIN_ONLY_TOOLS]),
+const ROLE_TOOLS: Record<IntempusRole, readonly string[]> = {
+  employee: SELF_TOOLS,
+  approver: APPROVAL_TOOLS,
+  admin: ADMIN_ONLY_TOOLS,
 };
 
-const ALL_TOOLS = new Set(Object.values(PROFILE_TOOLS).flatMap(tools => [...tools]));
+const ALL_TOOLS = new Set([...COMMON_TOOLS, ...Object.values(ROLE_TOOLS).flat()]);
 
 export const WRITE_TOOLS = new Set([
   'intempus_register_time',
@@ -126,8 +147,10 @@ export const WRITE_TOOLS = new Set([
   'intempus_commit_prepared_operation',
 ]);
 
-export function toolNamesForProfile(current: IntempusProfile = profile()): Set<string> {
-  return PROFILE_TOOLS[current];
+/** Tools available to a user holding `roles` (the union; nothing without a role). */
+export function toolNamesFor(roles: readonly IntempusRole[]): Set<string> {
+  if (roles.length === 0) return new Set();
+  return new Set([...COMMON_TOOLS, ...roles.flatMap(role => ROLE_TOOLS[role])]);
 }
 
 export interface IntempusPolicyDecision {
@@ -135,11 +158,11 @@ export interface IntempusPolicyDecision {
   reason: string;
 }
 
-export function checkToolPolicy(toolName: string): IntempusPolicyDecision {
-  const current = profile();
-  if (!PROFILE_TOOLS[current].has(toolName)) {
+export function checkToolPolicy(toolName: string, roles: readonly IntempusRole[]): IntempusPolicyDecision {
+  const label = roles.length ? roles.join('+') : 'no role';
+  if (!toolNamesFor(roles).has(toolName)) {
     if (ALL_TOOLS.has(toolName)) {
-      return { allowed: false, reason: `tool is not available in the ${current} profile: ${toolName}` };
+      return { allowed: false, reason: `tool is not available for your roles (${label}): ${toolName}` };
     }
     return { allowed: false, reason: `tool is not allowlisted: ${toolName}` };
   }
@@ -149,5 +172,5 @@ export function checkToolPolicy(toolName: string): IntempusPolicyDecision {
       reason: `write tool is disabled on this instance (INTEMPUS_ENABLE_WRITES != true): ${toolName}`,
     };
   }
-  return { allowed: true, reason: `allowed in ${current} profile` };
+  return { allowed: true, reason: `allowed for ${label}` };
 }
