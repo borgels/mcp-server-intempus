@@ -1,6 +1,6 @@
 # mcp-server-intempus
 
-MCP server for [Visma Intempus](https://intempus.dk/web-doc/v1/) — time registration, approval, balances (saldi), cases, employees and planning — with three profiles and per-user scoping.
+MCP server for [Visma Intempus](https://intempus.dk/web-doc/v1/) — time registration, approval, balances (saldi), cases, employees and planning — with employee, approver and admin roles on one endpoint and per-user scoping.
 
 ## Roles
 
@@ -33,14 +33,14 @@ Every role gets `intempus_whoami` (shows your roles and linked employee), `intem
 - **Registrations are checked before they are sent** against the rules Intempus enforces: a contract covering the date, outside the contract's locked period, a work type from the contract's work model, start/end times for interval work types, a case for project work, an open case. `creation_id` (UUID v5 of user + employee + `idempotencyKey`) makes retries safe — verified live: a retry returns the same report.
 - **Irreversible admin changes are two-step**: the prepare result is an HMAC-signed preview naming every affected record; commit accepts only an unaltered operation signed by this server, within 15 minutes, by the user who prepared it, whose steps still pass the allowlist. The gateway can gate the commit tool with a separate duty group.
 - **Writes need `INTEMPUS_ENABLE_WRITES=true`** — checked in the policy and again in every write path.
-- **Attribution.** The API key belongs to one Intempus user, so Intempus' own history shows that user for every change. The JSONL audit (`INTEMPUS_AUDIT_LOG`) records the Entra user, profile, tool and a hash of the arguments (plus the operation hash on commits); requests without `X-MCP-User` are refused when trust is enabled.
+- **Attribution.** The API key belongs to one Intempus user, so Intempus' own history shows that user for every change. The JSONL audit (`INTEMPUS_AUDIT_LOG`) records the Entra user, roles, tool and a hash of the arguments (plus the operation hash on commits); requests without `X-MCP-User` are refused when trust is enabled.
 - No credentials in tool arguments or results: generated passwords are never echoed, password/PIN fields are stripped from raw reads, `api_key`/`outlook_credential` are not readable.
 
 ## Not possible via Intempus' public API
 
 Verified live on 2026-09-29 (details in [docs/api-notes.md](docs/api-notes.md)):
 
-- **Approving time.** `approved` is read-only, and `approved_by_initial` / `approved_by_final` can be set (to a *user profile*) without the report becoming approved. Approval stays in Intempus' web/approval app; the approver endpoint shows what is waiting. Intempus' own MCP server (`mcp.intempus.dk`, needs an `X-Security-Key` from Intempus) advertises bulk approval — the way to get approval into Claude, if wanted.
+- **Approving time.** `approved` is read-only, and `approved_by_initial` / `approved_by_final` can be set (to a *user profile*) without the report becoming approved. Approval stays in Intempus' web/approval app; the approver role shows what is waiting. Intempus' own MCP server (`mcp.intempus.dk`, needs an `X-Security-Key` from Intempus) advertises bulk approval — the way to get approval into Claude, if wanted.
 - **Locking work reports** (`work_report/bulk/`) needs Intempus' "work report state" feature, which ONE's account does not have (401 "…only be updated if the feature is enabled"). The prepare kind `lock_work_reports` works once Intempus enables it; period locks via the contract's `locked_date` work today.
 - **Deleting employees.** Intempus refuses (409) while a user profile exists, every employee gets one, and user profiles cannot be deleted. Employees are removed by **offboarding**: open contracts end on the last day and backend/approval logins are revoked.
 
