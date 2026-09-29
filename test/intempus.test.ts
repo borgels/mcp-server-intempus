@@ -3,7 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { IntempusClient, idFromUri } from '../src/intempus/client.js';
 import { redactSecrets, IntempusHttpError } from '../src/errors.js';
-import { checkToolPolicy, toolNamesForProfile } from '../src/intempus/policy.js';
+import { checkToolPolicy, configuredRoles, parseRoles, toolNamesFor } from '../src/intempus/policy.js';
 import { resolveEmployee } from '../src/intempus/identity.js';
 import { ApproverScope } from '../src/intempus/scope.js';
 import { uuidV5 } from '../src/intempus/format.js';
@@ -120,28 +120,70 @@ describe('client', () => {
 });
 
 describe('policy', () => {
-  it('keeps the profiles apart', () => {
-    const employee = toolNamesForProfile('employee');
-    const approver = toolNamesForProfile('approver');
-    const admin = toolNamesForProfile('admin');
+  it('gives each role its own tools and a user the union of their roles', () => {
+    const employee = toolNamesFor(['employee']);
+    const approver = toolNamesFor(['approver']);
+    const admin = toolNamesFor(['admin']);
     expect(employee.has('intempus_register_time')).toBe(true);
     expect(employee.has('intempus_list_team')).toBe(false);
     expect(employee.has('intempus_manage_employee')).toBe(false);
     expect(approver.has('intempus_list_team_work_reports')).toBe(true);
-    expect(approver.has('intempus_manage_work_report')).toBe(false);
+    expect(approver.has('intempus_register_time')).toBe(false);
     expect(approver.has('intempus_commit_prepared_operation')).toBe(false);
     expect(admin.has('intempus_manage_employee')).toBe(true);
     expect(admin.has('intempus_register_time')).toBe(false);
+    const jesper = toolNamesFor(['employee', 'approver', 'admin']);
+    for (const tool of ['intempus_register_time', 'intempus_list_team', 'intempus_manage_employee', 'intempus_whoami']) {
+      expect(jesper.has(tool)).toBe(true);
+    }
+    expect(toolNamesFor([]).size).toBe(0);
   });
 
-  it('denies write tools unless INTEMPUS_ENABLE_WRITES=true', () => {
-    expect(checkToolPolicy('intempus_register_time').allowed).toBe(false);
+  it('parses role lists strictly and takes roles from the gateway only in roles mode', () => {
+    expect(parseRoles('admin, Employee,root,,approver')).toEqual(['employee', 'approver', 'admin']);
+    expect(parseRoles(undefined)).toEqual([]);
+    process.env.INTEMPUS_PROFILE = 'roles';
+    expect(configuredRoles()).toEqual([]);
+    process.env.INTEMPUS_PROFILE = 'employee,approver';
+    expect(configuredRoles()).toEqual(['employee', 'approver']);
+    delete process.env.INTEMPUS_PROFILE;
+    expect(configuredRoles()).toEqual(['employee']);
+  });
+
+  it('denies write tools unless INTEMPUS_ENABLE_WRITES=true, and tools outside the roles', () => {
+    expect(checkToolPolicy('intempus_register_time', ['employee']).allowed).toBe(false);
     process.env.INTEMPUS_ENABLE_WRITES = 'yes';
-    expect(checkToolPolicy('intempus_register_time').allowed).toBe(false);
+    expect(checkToolPolicy('intempus_register_time', ['employee']).allowed).toBe(false);
     process.env.INTEMPUS_ENABLE_WRITES = 'true';
-    expect(checkToolPolicy('intempus_register_time').allowed).toBe(true);
-    expect(checkToolPolicy('intempus_manage_employee')).toMatchObject({ allowed: false, reason: expect.stringContaining('employee profile') });
-    expect(checkToolPolicy('intempus_do_anything').reason).toContain('not allowlisted');
+    expect(checkToolPolicy('intempus_register_time', ['employee']).allowed).toBe(true);
+    expect(checkToolPolicy('intempus_manage_employee', ['employee'])).toMatchObject({ allowed: false, reason: expect.stringContaining('your roles') });
+    expect(checkToolPolicy('intempus_whoami', []).allowed).toBe(false);
+    expect(checkToolPolicy('intempus_do_anything', ['admin']).reason).toContain('not allowlisted');
+  });
+});
+
+describe('roles from the gateway', () => {
+  it('registers the union of the roles passed per request', async () => {
+    const fake = new FakeIntempus(seed());
+    const server = createServer({ client: fake.client(), onBehalfOf: 'ann@one.dk', roles: ['employee', 'approver'] });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: 'test', version: '0.0.0' });
+    await client.connect(clientTransport);
+    const names = (await client.listTools()).tools.map(tool => tool.name);
+    expect(names).toEqual(expect.arrayContaining(['intempus_register_time', 'intempus_list_team', 'intempus_whoami']));
+    expect(names).not.toContain('intempus_manage_employee');
+    const whoami = JSON.parse(((await client.callTool({ name: 'intempus_whoami', arguments: {} })).content as Array<{ text: string }>)[0]!.text);
+    expect(whoami).toMatchObject({ roles: ['employee', 'approver'], employee: { id: 1 }, approver: { levels: [{ level: 'final_approver' }] } });
+  });
+
+  it('offers nothing without a role', async () => {
+    const server = createServer({ client: new FakeIntempus(seed()).client(), onBehalfOf: 'ann@one.dk', roles: [] });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: 'test', version: '0.0.0' });
+    await client.connect(clientTransport);
+    await expect(client.listTools()).rejects.toThrow();
   });
 });
 
