@@ -2,13 +2,29 @@
 
 MCP server for [Visma Intempus](https://intempus.dk/web-doc/v1/) — time registration, approval, balances (saldi), cases, employees and planning — with three profiles and per-user scoping.
 
-## Profiles
+## Roles
 
-One image, selected by `INTEMPUS_PROFILE`. Each profile runs on its own hostname behind its own Entra security group (see [Deployment](#deployment)).
+One server, one endpoint. Every user holds one or more **roles**, and the tools they see are the union of those roles. With `INTEMPUS_PROFILE=roles` the roles arrive per request in `X-MCP-Roles`. The gateway derives that header from the user's Entra security groups (a `roles` table in `hosts.json`), and it is honored only together with `INTEMPUS_TRUST_FORWARDED_USER=true`; a user with no role gets 403. A fixed role or list (e.g. `INTEMPUS_PROFILE=employee` or `employee,approver`) gives every request the same roles, which is useful for stdio.
 
-- **`employee`** — self-service for full- and part-time employees, hard-scoped to the requesting user: `intempus_get_my_profile`, `intempus_list_my_work_reports`, `intempus_register_time`, `intempus_update_my_work_report` / `intempus_delete_my_work_report` (only while neither approved nor locked), `intempus_get_my_balances`, `intempus_get_my_planning`, plus `intempus_list_cases`, `intempus_list_work_types` (own work model only), `intempus_whoami`, `intempus_search_capabilities`.
-- **`approver`** — the employee tools plus a read-only team view: `intempus_list_team`, `intempus_list_team_work_reports` (e.g. what awaits approval), `intempus_get_team_balances`, `intempus_get_team_planning`. Scope = the employees, departments and cases the user is responsible for in Intempus (`responsible_for_employee` / `_department` / `_case`). **Approving happens in Intempus itself** — see [below](#not-possible-via-intempus-public-api).
-- **`admin`** — company-wide: employees (`intempus_manage_employee` create/update/offboard), contracts, login access, approvers and responsibilities (which is what scopes the approver endpoint), time for anyone, cases, customers, balances, schedules, planned work, reference data, allowlisted generic reads (`intempus_get_resource`), and the two-step `intempus_prepare_admin_change` → `intempus_commit_prepared_operation` for deletes and period locks (contract `locked_date`).
+- **`employee`** — self-service for full- and part-time employees, hard-scoped to the requesting user:
+  - `intempus_get_my_profile`, `intempus_list_my_work_reports`
+  - `intempus_register_time`
+  - `intempus_update_my_work_report` / `intempus_delete_my_work_report`, only while the report is neither approved nor locked
+  - `intempus_get_my_balances`, `intempus_get_my_planning`
+- **`approver`** — a read-only team view:
+  - `intempus_list_team`
+  - `intempus_list_team_work_reports`, e.g. what awaits approval
+  - `intempus_get_team_balances`, `intempus_get_team_planning`
+
+  Scope is the employees, departments and cases the user is responsible for in Intempus (`responsible_for_employee` / `_department` / `_case`), or everyone with `INTEMPUS_APPROVER_UNASSIGNED_SCOPE=all` when Intempus has no assignments. **Approving happens in Intempus itself** — see [below](#not-possible-via-intempus-public-api).
+- **`admin`** — company-wide:
+  - employees (`intempus_manage_employee` create/update/offboard), contracts, login access
+  - approvers and responsibilities, which is what scopes the approver role
+  - time for anyone, cases, customers, balances, schedules, planned work, reference data
+  - allowlisted generic reads (`intempus_get_resource`)
+  - the two-step `intempus_prepare_admin_change` → `intempus_commit_prepared_operation` for deletes and period locks (contract `locked_date`)
+
+Every role gets `intempus_whoami` (shows your roles and linked employee), `intempus_search_capabilities`, `intempus_list_cases` and `intempus_list_work_types`.
 
 ## Guarantees
 
@@ -45,18 +61,20 @@ bpc keeps its own direct Intempus integration (cases out, approved time in). Thi
 
 ## Configuration
 
-See [`.env.example`](.env.example). Minimal production set: `INTEMPUS_API_USER`, `INTEMPUS_API_KEY`, `INTEMPUS_PROFILE`, `INTEMPUS_TRUST_FORWARDED_USER=true`, `INTEMPUS_ENABLE_WRITES=true`, `INTEMPUS_AUDIT_LOG=/data/audit.jsonl`, `MCP_HTTP_TOKEN` (shared with the gateway), and `INTEMPUS_OPERATION_SECRET` on the admin instance.
+See [`.env.example`](.env.example). Minimal production set: `INTEMPUS_API_USER`, `INTEMPUS_API_KEY`, `INTEMPUS_PROFILE=roles`, `INTEMPUS_TRUST_FORWARDED_USER=true`, `INTEMPUS_ENABLE_WRITES=true`, `INTEMPUS_AUDIT_LOG=/data/audit.jsonl`, `INTEMPUS_OPERATION_SECRET`, and `MCP_HTTP_TOKEN` (shared with the gateway).
 
 ## Deployment
 
-Runs on **one-1** behind the Borgels MCP Entra gateway (`bos-server-config/one-1/mcp`), one container per profile:
+Runs on **one-1** behind the Borgels MCP Entra gateway (`bos-server-config/one-1/mcp`).
 
-| Profile | Host | Entra group (ONE tenant) |
-|---|---|---|
-| `employee` | `intempus.mcp.onedanmark.dk` | `SG-MCP-intempus-one` |
-| `approver` | `intempus-godkend.mcp.onedanmark.dk` | `SG-MCP-intempus-godkender-one` |
-| `admin` | `intempus-admin.mcp.onedanmark.dk` | `SG-MCP-intempus-admin-one` |
-| duty group for `intempus_commit_prepared_operation` | admin host, `toolGroups` | `SG-MCP-intempus-admin-commit-one` |
+One container (`INTEMPUS_PROFILE=roles`) on **`https://intempus.mcp.onedanmark.dk/mcp`**. The gateway maps Entra groups (ONE tenant) to roles:
+
+| Role | Entra group |
+|---|---|
+| `employee` | `SG-MCP-intempus-one` |
+| `approver` | `SG-MCP-intempus-godkender-one` |
+| `admin` | `SG-MCP-intempus-admin-one` |
+| duty group for `intempus_commit_prepared_operation` (`toolGroups`) | `SG-MCP-intempus-admin-commit-one` |
 
 Group membership must be **direct** (the app emits `ApplicationGroup` claims; nested groups are not included), and each group must be assigned to the Borgels MCP enterprise app. Each person's Entra UPN must match their Intempus username or work email (or be mapped with `INTEMPUS_IDENTITY_MAP`).
 
@@ -67,7 +85,7 @@ npm install
 npm run dev          # stdio (acting user from INTEMPUS_DEFAULT_USER)
 npm run dev:http     # streamable HTTP on :3000/mcp (stateless)
 npm test
-INTEMPUS_PROFILE=admin SMOKE_USER=you@example.com npm run smoke:live   # read-only, against the real API
+INTEMPUS_PROFILE=admin SMOKE_USER=you@example.com npm run smoke:live   # read-only; roles: employee | approver | admin   # read-only, against the real API
 ```
 
 Docker images: `ghcr.io/borgels/mcp-server-intempus` (published on push to `main`).

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- One endpoint instead of one per profile. With `INTEMPUS_PROFILE=roles`, each request carries the user's roles in `X-MCP-Roles`.
+  - The one-1 gateway derives the header from Entra groups (a `roles` table in `hosts.json`), and it is trusted only with `INTEMPUS_TRUST_FORWARDED_USER=true`.
+  - The tools offered are the union of the user's roles (employee, approver, admin), and a user with no role gets 403.
+  - A fixed role or comma list in `INTEMPUS_PROFILE` still works (stdio).
+- `intempus_whoami` reports `roles` instead of `profile`.
+
 ## 0.1.0
 
 Initial release.

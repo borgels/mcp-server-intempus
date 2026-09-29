@@ -35,7 +35,7 @@ export const DESTRUCTIVE_TOOL_ANNOTATIONS = {
 const SELF_NOTE = 'Scoped to YOUR OWN Intempus employee — the server resolves you from the gateway identity and pins every call to your employee id.';
 const SCOPE_NOTE = 'Scoped to the employees/cases you are responsible for in Intempus (responsible_for_employee/_department/_case).';
 const WRITE_NOTE = 'Requires INTEMPUS_ENABLE_WRITES=true on the instance.';
-const ADMIN_NOTE = 'Admin profile: company-wide. Every call is audited with your Entra identity (Intempus itself records the API user).';
+const ADMIN_NOTE = 'Admin role: company-wide. Every call is audited with your Entra identity (Intempus itself records the API user).';
 const DATE = 'Dates as YYYY-MM-DD, times as HH:MM';
 
 export const INTEMPUS_CAPABILITIES: IntempusCapability[] = [
