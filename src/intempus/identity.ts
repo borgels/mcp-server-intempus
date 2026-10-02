@@ -54,7 +54,7 @@ export function clearEmployeeCache(): void {
  * whose Intempus username/email is not their UPN (many have a private
  * email in Intempus). INTEMPUS_IDENTITY_MAP holds inline JSON, or
  * INTEMPUS_IDENTITY_MAP_PATH points at a JSON file:
- *   { "jane@onedanmark.dk": "1001" }
+ *   { "jane@example.com": "1001" }
  */
 export function identityMap(): Map<string, string> {
   const raw = process.env.INTEMPUS_IDENTITY_MAP

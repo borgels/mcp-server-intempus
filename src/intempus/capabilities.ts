@@ -218,7 +218,7 @@ export const INTEMPUS_CAPABILITIES: IntempusCapability[] = [
     description: 'Create an employee, update master data, or offboard (end open contracts, revoke logins) — offboarding is how an employee is removed; Intempus does not allow deleting employees.',
     risk: 'write',
     examples: [
-      { action: 'create', name: 'Jane Jensen', number: '1003', username: 'jaje@onedanmark.dk', email: 'jaje@onedanmark.dk' },
+      { action: 'create', name: 'Jane Jensen', number: '1003', username: 'jane@example.com', email: 'jane@example.com' },
       { action: 'offboard', employeeId: 1001, date: '2026-10-31' },
     ],
     identifierFormats: ['action: create | update | offboard'],
