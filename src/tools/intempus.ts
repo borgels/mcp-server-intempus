@@ -751,7 +751,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
     {
       title: 'Create/Update Case (Intempus, admin)',
       description:
-        'Create or update a case/project. With projectNumber the name becomes "<projectNumber> - <name>", the convention bpc (projects.example.com) matches on. ' +
+        'Create or update a case/project. With projectNumber the name becomes "<projectNumber> - <name>", the common case-naming convention. ' +
         'Close a case with active=false or permitNewWorkReports=false. A create is refused when the number or name already exists.',
       inputSchema: {
         action: z.enum(['create', 'update']),
