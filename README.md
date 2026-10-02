@@ -55,9 +55,9 @@ Verified against a production account on 2026-09-29; details in [docs/api-notes.
 - Holiday balances accrue at month end: a balance "as of today" does not include this month's accrual yet.
 - Rate limit is 500 requests/minute **per Intempus user**, shared with every integration using the same key (e.g. bpc).
 
-## Relation to bpc (projects.example.com)
+## Relation to other Intempus integrations
 
-bpc keeps its own direct Intempus integration (cases out, approved time in). This server runs alongside it and follows the same case convention: `intempus_manage_case` with `projectNumber` names the case `"<projektnr> - <navn>"`, which is what bpc matches on, and refuses a create when the number or name already exists.
+Other systems may keep their own direct Intempus integration (cases out, approved time in). This server follows the common case convention: `intempus_manage_case` with `projectNumber` names the case `"<projektnr> - <navn>"`, and refuses a create when the number or name already exists.
 
 ## Configuration
 
@@ -65,18 +65,16 @@ See [`.env.example`](.env.example). Minimal production set: `INTEMPUS_API_USER`,
 
 ## Deployment
 
-Runs on **the server** behind the Borgels MCP Entra gateway (`bos-server-config/the server/mcp`).
-
-One container (`INTEMPUS_PROFILE=roles`) on **`https://intempus.mcp.example.com/mcp`**. The gateway maps Entra groups (ONE tenant) to roles:
+One container (`INTEMPUS_PROFILE=roles`) behind an authenticating MCP gateway. The gateway maps Entra security groups to roles (`X-MCP-Roles`):
 
 | Role | Entra group |
 |---|---|
-| `employee` | `SG-MCP-intempus-one` |
-| `approver` | `SG-MCP-intempus-godkender-one` |
-| `admin` | `SG-MCP-intempus-admin-one` |
-| duty group for `intempus_commit_prepared_operation` (`toolGroups`) | `SG-MCP-intempus-admin-commit-one` |
+| `employee` | one group per company, e.g. *employees* |
+| `approver` | *approvers* |
+| `admin` | *admins* |
+| duty group for `intempus_commit_prepared_operation` (`toolGroups`) | *admin commit* |
 
-Group membership must be **direct** (the app emits `ApplicationGroup` claims; nested groups are not included), and each group must be assigned to the Borgels MCP enterprise app. Each person's Entra UPN must match their Intempus username or work email (or be mapped with `INTEMPUS_IDENTITY_MAP`).
+Group membership must be **direct** (the app emits `ApplicationGroup` claims; nested groups are not included), and each group must be assigned to the gateway's enterprise app. Each person's Entra UPN must match their Intempus username or work email (or be mapped with `INTEMPUS_IDENTITY_MAP`).
 
 ## Run
 
