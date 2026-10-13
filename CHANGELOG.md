@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Security hardening:
+  - Self-service and admin edits/deletes of a work report are refused when the report's current date is inside the contract's locked period (previously only the new date was checked).
+  - `intempus_manage_work_report` and `intempus_manage_schedule` no longer delete; deletes go through `intempus_prepare_admin_change` / `intempus_commit_prepared_operation`.
+  - The HTTP transport refuses to start with `INTEMPUS_TRUST_FORWARDED_USER=true` and no `MCP_HTTP_TOKEN`; `X-MCP-User`/`X-MCP-Roles` are honored only under both. The bearer token is compared in constant time.
+  - Path parameters are validated (no empty, dot, separator, query/fragment or percent-encoded separator values) before they go into request URLs.
+  - `creation_id` is now derived with SHA-256 (UUID version 8) instead of SHA-1 (v5). A retry spanning an upgrade gets a new id.
+  - Filter-key validation in `intempus_get_resource` uses a linear-time pattern.
+
 ## 0.2.0
 
 - One endpoint instead of one per profile. With `INTEMPUS_PROFILE=roles`, each request carries the user's roles in `X-MCP-Roles`.
