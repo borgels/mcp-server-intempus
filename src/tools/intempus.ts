@@ -9,7 +9,7 @@ import {
   WRITE_TOOL_ANNOTATIONS,
   searchCapabilities,
 } from '../intempus/capabilities.js';
-import { idFromUri, type IntempusClient, type IntempusObject, type QueryValue } from '../intempus/client.js';
+import { idFromUri, pathSegment, type IntempusClient, type IntempusObject, type QueryValue } from '../intempus/client.js';
 import { caseView, customerView, employeeView, normalizeTime, sanitizeRaw, today, workReportView } from '../intempus/format.js';
 import {
   clearEmployeeCache,
@@ -714,12 +714,13 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
   register(
     'intempus_manage_work_report',
     {
-      title: 'Create/Update/Delete Work Report (Intempus, admin)',
+      title: 'Create/Update Work Report (Intempus, admin)',
       description:
-        'Register, correct or delete time on behalf of any employee. Contract, locked date, case and work type are checked; locked reports are refused.',
+        'Register or correct time on behalf of any employee. Contract, locked date (of both the current and the new date), case and work type are checked; locked reports are refused. ' +
+        'Deleting is a two-step change: use intempus_prepare_admin_change (kind delete, resource work_report) and intempus_commit_prepared_operation.',
       inputSchema: {
-        action: z.enum(['create', 'update', 'delete']),
-        workReportId: idSchema.optional().describe('Required for update/delete.'),
+        action: z.enum(['create', 'update']),
+        workReportId: idSchema.optional().describe('Required for update.'),
         employeeId: idSchema.optional().describe('Required for create.'),
         ...partial(timeFields),
         idempotencyKey: z.string().trim().min(8).max(200).optional(),
@@ -737,9 +738,6 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
         const report = await getWorkReport(client, requireId(workReportId, 'workReportId'));
         if (report.isimmutable === true) {
           throw new Error(`Work report ${String(report.id)} is locked; unlock it with intempus_prepare_admin_change first.`);
-        }
-        if (action === 'delete') {
-          return jsonResult(await deleteTime(client, report));
         }
         const target = await adminTarget(client, idFromUri(report.employee) ?? Number(report.employee_id), actingAs);
         return jsonResult(await updateTime(client, target, report, fields));
@@ -936,11 +934,13 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
   register(
     'intempus_manage_schedule',
     {
-      title: 'Create/Update/Delete Schedule (Intempus, admin)',
-      description: 'Plan work: employees, case, work type, date range, times, weekdays and recurrence. Intempus generates planned work from it.',
+      title: 'Create/Update Schedule (Intempus, admin)',
+      description:
+        'Plan work: employees, case, work type, date range, times, weekdays and recurrence. Intempus generates planned work from it. ' +
+        'Deleting a schedule is a two-step change: use intempus_prepare_admin_change (kind delete, resource schedule) and intempus_commit_prepared_operation.',
       inputSchema: {
-        action: z.enum(['create', 'update', 'delete']),
-        scheduleId: idSchema.optional().describe('Required for update/delete.'),
+        action: z.enum(['create', 'update']),
+        scheduleId: idSchema.optional().describe('Required for update.'),
         employeeIds: z.array(idSchema).min(1).max(200).optional(),
         caseId: idSchema.nullable().optional(),
         workTypeId: idSchema.nullable().optional(),
@@ -960,12 +960,6 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
     },
     async input =>
       audited('intempus_manage_schedule', input, async () => {
-        if (input.action === 'delete') {
-          assertWritesEnabled('delete schedule');
-          const scheduleId = requireId(input.scheduleId, 'scheduleId');
-          await client.delete(`schedule/${scheduleId}/`);
-          return jsonResult({ deleted: true, scheduleId });
-        }
         const weekdays = input.weekdays
           ? Object.fromEntries(
               ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].map(day => [day, input.weekdays!.includes(day as never)]),
@@ -1029,7 +1023,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
       inputSchema: {
         resource: z.string().trim().refine(value => READABLE_RESOURCES.has(value), 'resource is not readable through this tool'),
         id: idSchema.optional(),
-        filters: z.record(z.string().regex(/^[a-z_]+(__[a-z_]+)*$/), z.union([z.string(), z.number(), z.boolean()])).optional(),
+        filters: z.record(z.string().max(100).regex(/^[a-z][a-z_]*$/), z.union([z.string(), z.number(), z.boolean()])).optional(),
         limit: z.number().int().min(1).max(1000).default(100),
       },
       annotations: READ_TOOL_ANNOTATIONS,
@@ -1037,9 +1031,9 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
     async input =>
       audited('intempus_get_resource', input, async () => {
         if (input.id !== undefined) {
-          return jsonResult(sanitizeRaw(await client.get<IntempusObject>(`${input.resource}/${input.id}/`)));
+          return jsonResult(sanitizeRaw(await client.get<IntempusObject>(`${pathSegment(input.resource)}/${pathSegment(input.id)}/`)));
         }
-        const result = await client.listAll<IntempusObject>(`${input.resource}/`, input.filters ?? {}, input.limit);
+        const result = await client.listAll<IntempusObject>(`${pathSegment(input.resource)}/`, input.filters ?? {}, input.limit);
         return jsonResult({ resource: input.resource, totalCount: result.totalCount, truncated: result.truncated, objects: result.items.map(sanitizeRaw) });
       }),
   );
