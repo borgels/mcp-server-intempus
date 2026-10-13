@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 export class HttpRequestError extends Error {
@@ -31,9 +32,40 @@ export function assertAuthorized(req: IncomingMessage, config = getHttpConfig())
     return;
   }
 
-  if (req.headers.authorization !== `Bearer ${config.httpToken}`) {
+  const given = req.headers.authorization ?? '';
+  if (!constantTimeEquals(given, `Bearer ${config.httpToken}`)) {
     throw new HttpRequestError(401, 'Unauthorized');
   }
+}
+
+/** Compare secrets without leaking length or prefix through timing (hash both sides first). */
+export function constantTimeEquals(a: string, b: string): boolean {
+  const left = createHash('sha256').update(a, 'utf8').digest();
+  const right = createHash('sha256').update(b, 'utf8').digest();
+  return timingSafeEqual(left, right);
+}
+
+/** Env vars that make the server trust identity headers set by an upstream gateway. */
+export const TRUST_FORWARDED_ENV_VARS = ['INTEMPUS_TRUST_FORWARDED_USER'] as const;
+
+/**
+ * Refuse to start the HTTP transport when forwarded identity headers are
+ * trusted but no MCP_HTTP_TOKEN protects the endpoint: anyone reaching it
+ * could otherwise claim any user (and, in roles mode, any role).
+ */
+export function assertSafeHttpStartup(env: NodeJS.ProcessEnv = process.env): void {
+  const trusting = TRUST_FORWARDED_ENV_VARS.filter(name => env[name] === 'true');
+  if (trusting.length > 0 && !env.MCP_HTTP_TOKEN) {
+    throw new Error(
+      `${trusting.join(', ')}=true requires MCP_HTTP_TOKEN: forwarded identity headers (X-MCP-User, X-MCP-Roles) ` +
+        'may only be trusted on an endpoint that authenticates the gateway. Set MCP_HTTP_TOKEN or disable the trust flag.',
+    );
+  }
+}
+
+/** Forwarded identity headers are honored only with the trust flag AND a configured MCP_HTTP_TOKEN. */
+export function forwardedHeadersTrusted(config: HttpConfig, env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.INTEMPUS_TRUST_FORWARDED_USER === 'true' && Boolean(config.httpToken);
 }
 
 export function assertAllowedOrigin(req: IncomingMessage): void {

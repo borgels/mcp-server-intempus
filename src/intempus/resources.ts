@@ -1,4 +1,4 @@
-import { idFromUri, type IntempusClient, type IntempusObject, type QueryValue } from './client.js';
+import { idFromUri, pathSegment, type IntempusClient, type IntempusObject, type QueryValue } from './client.js';
 import {
   addDays,
   caseView,
@@ -8,7 +8,7 @@ import {
   normalizeTime,
   plannedView,
   today,
-  uuidV5,
+  nameUuid,
   workReportView,
   workTypeView,
 } from './format.js';
@@ -267,7 +267,7 @@ export interface TimeTarget {
 export async function createTime(client: IntempusClient, target: TimeTarget, input: TimeInput) {
   assertWritesEnabled('create work report');
   const body = await buildTimeBody(client, target, input);
-  const creationId = uuidV5(`${target.actingAs}|${target.employeeId}|${input.idempotencyKey ?? crypto.randomUUID()}`);
+  const creationId = nameUuid(`${target.actingAs}|${target.employeeId}|${input.idempotencyKey ?? crypto.randomUUID()}`);
   const employee = await client.get<IntempusObject>(`employee/${target.employeeId}/`);
   const created = await client.post<IntempusObject | null>('work_report/', {
     ...body,
@@ -285,6 +285,10 @@ export async function updateTime(
   input: Partial<TimeInput>,
 ) {
   assertWritesEnabled('update work report');
+  // The report's current date must be outside the locked payroll period too —
+  // otherwise a locked registration could be moved out of (or changed inside)
+  // a closed period. buildTimeBody checks the new date.
+  assertExistingNotLocked(target.contracts, existing);
   const merged: TimeInput = {
     date: input.date ?? String(existing.start_date),
     endDate: input.endDate ?? (existing.end_date as string | undefined),
@@ -298,14 +302,40 @@ export async function updateTime(
     additionalRemarks: input.additionalRemarks ?? (existing.additional_remarks as string | undefined),
   };
   const body = await buildTimeBody(client, target, merged);
-  const updated = await client.patch<IntempusObject | null>(`work_report/${String(existing.id)}/`, body);
+  const updated = await client.patch<IntempusObject | null>(`work_report/${pathSegment(Number(existing.id))}/`, body);
   return updated ? workReportView(updated) : workReportView(await getWorkReport(client, Number(existing.id)));
 }
 
 export async function deleteTime(client: IntempusClient, existing: IntempusObject) {
   assertWritesEnabled('delete work report');
-  await client.delete(`work_report/${String(existing.id)}/`);
+  // Read the owner's contracts fresh so the locked date is current.
+  const ownerId = idFromUri(existing.employee) ?? Number(existing.employee_id);
+  if (!Number.isInteger(ownerId) || ownerId <= 0) {
+    throw new Error(`Work report ${String(existing.id)} has no readable employee; refusing to delete it.`);
+  }
+  const owner = await client.get<IntempusObject>(`employee/${pathSegment(ownerId)}/`);
+  assertExistingNotLocked(contractsOf(owner), existing);
+  await client.delete(`work_report/${pathSegment(Number(existing.id))}/`);
   return { deleted: true, workReport: workReportView(existing) };
+}
+
+/**
+ * Refuse changes to a report whose (current) date lies in the locked period
+ * of the contract covering it. Fails closed when no contract covers the date
+ * or the report has no readable date.
+ */
+export function assertExistingNotLocked(contracts: ContractSummary[], existing: IntempusObject): void {
+  const date = typeof existing.start_date === 'string' ? existing.start_date : undefined;
+  if (!date) {
+    throw new Error(`Work report ${String(existing.id)} has no readable date; refusing to change it.`);
+  }
+  const contract = contractOn(contracts, date);
+  if (!contract) {
+    throw new Error(`Work report ${String(existing.id)} (${date}) is not covered by a contract; its period lock cannot be checked, so it cannot be changed here.`);
+  }
+  if (contract.lockedDate && date <= contract.lockedDate) {
+    throw new Error(`Work report ${String(existing.id)} (${date}) is in the period locked up to ${contract.lockedDate}; it cannot be changed or deleted.`);
+  }
 }
 
 async function buildTimeBody(client: IntempusClient, target: TimeTarget, input: TimeInput): Promise<Record<string, unknown>> {
@@ -409,9 +439,9 @@ export async function createOrUpdate(
   assertWritesEnabled(action);
   const clean = Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined));
   if (id === undefined) {
-    return client.post<IntempusObject | null>(`${resource}/`, clean);
+    return client.post<IntempusObject | null>(`${pathSegment(resource)}/`, clean);
   }
-  return client.patch<IntempusObject | null>(`${resource}/${id}/`, clean);
+  return client.patch<IntempusObject | null>(`${pathSegment(resource)}/${pathSegment(id)}/`, clean);
 }
 
 export { contractsOf };

@@ -1,18 +1,22 @@
 import { createServer as createNodeServer } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createServer as createMcpServer } from '../server.js';
-import { parseRoles, rolesFromGateway, trustForwardedUser } from '../intempus/policy.js';
+import { parseRoles, rolesFromGateway } from '../intempus/policy.js';
 import {
   assertAllowedOrigin,
   assertAuthorized,
+  assertSafeHttpStartup,
   corsHeaders,
+  forwardedHeadersTrusted,
   getHttpConfig,
   HttpRequestError,
   readJsonBody,
   sendJson,
 } from './http-helpers.js';
 
+assertSafeHttpStartup();
 const config = getHttpConfig();
+const trusted = forwardedHeadersTrusted(config);
 
 const httpServer = createNodeServer(async (req, res) => {
   try {
@@ -40,13 +44,14 @@ const httpServer = createNodeServer(async (req, res) => {
     // The gateway forwards the Entra-verified user as X-MCP-User; the
     // stateless per-request server binds it as the Intempus acting
     // identity. Only honored when the deployment says the header can be
-    // trusted (it never arrives from public traffic — the gateway sets it).
-    const forwardedUser = trustForwardedUser()
+    // trusted (it never arrives from public traffic — the gateway sets it)
+    // and MCP_HTTP_TOKEN authenticates the gateway.
+    const forwardedUser = trusted
       ? (firstHeaderValue(req.headers['x-mcp-user']) ?? undefined)
       : undefined;
     // Every Intempus change is recorded as the one API user, so a request
     // without the acting user would be unattributable: refuse it.
-    if (trustForwardedUser() && !forwardedUser) {
+    if (trusted && !forwardedUser) {
       throw new HttpRequestError(401, 'Missing X-MCP-User from the gateway');
     }
 
@@ -55,7 +60,7 @@ const httpServer = createNodeServer(async (req, res) => {
     // are the union of those roles. Without a trusted gateway, no roles.
     let roles;
     if (rolesFromGateway()) {
-      roles = trustForwardedUser() ? parseRoles(firstHeaderValue(req.headers['x-mcp-roles'])) : [];
+      roles = trusted ? parseRoles(firstHeaderValue(req.headers['x-mcp-roles'])) : [];
       if (roles.length === 0) {
         throw new HttpRequestError(403, 'No Intempus role for this user (X-MCP-Roles from the gateway)');
       }
