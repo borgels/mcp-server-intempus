@@ -179,13 +179,15 @@ export function hoursBetween(start: string, end: string): number {
 const CREATION_NAMESPACE = '6f1d0c1e-2b8a-5d39-9c43-8f5b8e0a7c21';
 
 /**
- * RFC 4122 v5 UUID for Intempus' `creation_id`, which it de-duplicates on
- * (a retried create returns the existing row instead of a duplicate).
+ * Deterministic name-based UUID for Intempus' `creation_id`, which it
+ * de-duplicates on (a retried create returns the existing row instead of a
+ * duplicate). Built like an RFC 4122 v5 UUID but with SHA-256 instead of
+ * SHA-1, so it carries the RFC 9562 version 8 ("custom") marker.
  */
-export function uuidV5(name: string, namespace = CREATION_NAMESPACE): string {
+export function nameUuid(name: string, namespace = CREATION_NAMESPACE): string {
   const ns = Buffer.from(namespace.replace(/-/g, ''), 'hex');
-  const hash = createHash('sha1').update(Buffer.concat([ns, Buffer.from(name, 'utf8')])).digest();
-  hash[6] = (hash[6]! & 0x0f) | 0x50;
+  const hash = createHash('sha256').update(Buffer.concat([ns, Buffer.from(name, 'utf8')])).digest();
+  hash[6] = (hash[6]! & 0x0f) | 0x80;
   hash[8] = (hash[8]! & 0x3f) | 0x80;
   const hex = hash.subarray(0, 16).toString('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;

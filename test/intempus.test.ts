@@ -1,12 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { IntempusClient, idFromUri } from '../src/intempus/client.js';
+import type { IncomingMessage } from 'node:http';
+import { IntempusClient, idFromUri, pathSegment } from '../src/intempus/client.js';
+import {
+  assertAuthorized,
+  assertSafeHttpStartup,
+  constantTimeEquals,
+  forwardedHeadersTrusted,
+  HttpRequestError,
+} from '../src/transports/http-helpers.js';
 import { redactSecrets, IntempusHttpError } from '../src/errors.js';
 import { checkToolPolicy, configuredRoles, parseRoles, toolNamesFor } from '../src/intempus/policy.js';
 import { resolveEmployee } from '../src/intempus/identity.js';
 import { ApproverScope } from '../src/intempus/scope.js';
-import { uuidV5 } from '../src/intempus/format.js';
+import { nameUuid } from '../src/intempus/format.js';
 import { createServer } from '../src/server.js';
 import { FakeIntempus, jsonResponse, seed, uri } from './fake-intempus.js';
 
@@ -293,7 +301,7 @@ describe('employee profile tools', () => {
       start_time: '07:00:00',
       end_time: '15:30:00',
       amount: 8,
-      creation_id: uuidV5('bo@one.dk|2|retry-safe-1'),
+      creation_id: nameUuid('bo@one.dk|2|retry-safe-1'),
     });
   });
 
@@ -446,5 +454,83 @@ describe('admin profile tools', () => {
     const employee = await call('intempus_get_resource', { resource: 'employee', id: 1 });
     expect(employee.data.password).toBeUndefined();
     expect((await call('intempus_get_resource', { resource: 'api_key' })).isError).toBe(true);
+  });
+});
+
+describe('security hardening', () => {
+  const lockedReport = { id: 950, employee: uri('employee', 2), employee_id: '2', start_date: '2026-03-02', amount: '7.5', approved: false, approved_by: [], isimmutable: false };
+
+  beforeEach(() => {
+    process.env.INTEMPUS_ENABLE_WRITES = 'true';
+  });
+
+  it('refuses self-service delete or move of a report inside the locked period', async () => {
+    process.env.INTEMPUS_PROFILE = 'employee';
+    const fake = new FakeIntempus(seed());
+    fake.db.work_report!.push({ resource_uri: uri('work_report', 950), ...lockedReport });
+    const { call } = await connect(fake, 'bo@one.dk');
+    const deleted = await call('intempus_delete_my_work_report', { workReportId: 950 });
+    expect(deleted.isError).toBe(true);
+    expect(deleted.text).toContain('locked');
+    const moved = await call('intempus_update_my_work_report', { workReportId: 950, date: '2026-09-29' });
+    expect(moved.isError).toBe(true);
+    expect(moved.text).toContain('locked');
+    expect(fake.writes()).toHaveLength(0);
+  });
+
+  it('refuses admin updates of reports inside the locked period and has no direct deletes', async () => {
+    process.env.INTEMPUS_PROFILE = 'admin';
+    const fake = new FakeIntempus(seed());
+    fake.db.work_report!.push({ resource_uri: uri('work_report', 950), ...lockedReport });
+    const { call } = await connect(fake, 'admin@one.dk');
+    expect((await call('intempus_manage_work_report', { action: 'update', workReportId: 950, date: '2026-09-29' })).text).toContain('locked');
+    expect((await call('intempus_manage_work_report', { action: 'delete', workReportId: 900 })).isError).toBe(true);
+    expect((await call('intempus_manage_schedule', { action: 'delete', scheduleId: 1 })).isError).toBe(true);
+    expect(fake.writes()).toHaveLength(0);
+  });
+
+  it('accepts tastypie filter keys with a linear-time pattern', async () => {
+    process.env.INTEMPUS_PROFILE = 'admin';
+    const fake = new FakeIntempus(seed());
+    const { call } = await connect(fake, 'admin@one.dk');
+    expect((await call('intempus_get_resource', { resource: 'work_report', filters: { start_date__gte: '2026-09-01' } })).isError).toBe(false);
+    const started = Date.now();
+    const evil = await call('intempus_get_resource', { resource: 'work_report', filters: { [`${'_'.repeat(90)}!`]: 1 } });
+    expect(evil.isError).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('validates path parameters', () => {
+    for (const bad of ['', ' ', '.', '..', 'a/b', 'a\b', 'a?b', 'a#b', '%2e%2e', '%2F', 'x%2fy']) {
+      expect(() => pathSegment(bad)).toThrow(/Invalid path parameter/);
+    }
+    expect(pathSegment('case')).toBe('case');
+    expect(pathSegment(42)).toBe('42');
+    expect(() => new FakeIntempus(seed()).client().uri('case', '../employee')).toThrow(/Invalid path parameter/);
+  });
+
+  it('derives creation ids with SHA-256 (version 8 UUIDs), deterministically', () => {
+    const id = nameUuid('bo@one.dk|2|retry-safe-1');
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(nameUuid('bo@one.dk|2|retry-safe-1')).toBe(id);
+  });
+
+  it('compares the HTTP token in constant time and refuses unsafe trust configurations', () => {
+    const config = { host: '127.0.0.1', port: 0, maxBodyBytes: 1, httpToken: 's3cret' };
+    const req = (authorization?: string) => ({ headers: { authorization } }) as unknown as IncomingMessage;
+    expect(() => assertAuthorized(req('Bearer s3cret'), config)).not.toThrow();
+    expect(() => assertAuthorized(req('Bearer s3cre'), config)).toThrow(HttpRequestError);
+    expect(() => assertAuthorized(req(undefined), config)).toThrow(HttpRequestError);
+    expect(constantTimeEquals('a', 'a')).toBe(true);
+    expect(constantTimeEquals('a', 'ab')).toBe(false);
+
+    expect(() => assertSafeHttpStartup({ INTEMPUS_TRUST_FORWARDED_USER: 'true' })).toThrow(/MCP_HTTP_TOKEN/);
+    expect(() => assertSafeHttpStartup({ INTEMPUS_TRUST_FORWARDED_USER: 'true', MCP_HTTP_TOKEN: '' })).toThrow(/MCP_HTTP_TOKEN/);
+    expect(() => assertSafeHttpStartup({ INTEMPUS_TRUST_FORWARDED_USER: 'true', MCP_HTTP_TOKEN: 't' })).not.toThrow();
+    expect(() => assertSafeHttpStartup({})).not.toThrow();
+
+    expect(forwardedHeadersTrusted(config, { INTEMPUS_TRUST_FORWARDED_USER: 'true' })).toBe(true);
+    expect(forwardedHeadersTrusted({ ...config, httpToken: undefined }, { INTEMPUS_TRUST_FORWARDED_USER: 'true' })).toBe(false);
+    expect(forwardedHeadersTrusted(config, { INTEMPUS_TRUST_FORWARDED_USER: 'false' })).toBe(false);
   });
 });

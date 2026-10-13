@@ -133,7 +133,7 @@ export class IntempusClient {
 
   /** "/web/v1/employee/12/" for ("employee", 12). */
   uri(resource: string, id: number | string): string {
-    return `${this.uriPrefix}${resource}/${id}/`;
+    return `${this.uriPrefix}${pathSegment(resource)}/${pathSegment(id)}/`;
   }
 
   buildUrl(path: string, query?: Record<string, QueryValue>): string {
@@ -278,4 +278,25 @@ function assertSafeBaseUrl(baseUrl: string): void {
 
 function isLocalHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+}
+
+/**
+ * Validate one caller-influenced URL path segment and encode it. Rejects
+ * empty values, dot segments and anything that could change the path or
+ * start a query/fragment (including their percent-encoded forms).
+ */
+export function pathSegment(value: string | number): string {
+  const text = String(value);
+  if (
+    text.trim() === '' ||
+    text === '.' ||
+    text === '..' ||
+    /[/\\?#]/.test(text) ||
+    /%(2e|2f|5c|3f|23)/i.test(text) ||
+    // eslint-disable-next-line no-control-regex
+    /[\u0000-\u001f\u007f]/.test(text)
+  ) {
+    throw new Error(`Invalid path parameter: ${JSON.stringify(text.slice(0, 60))}`);
+  }
+  return encodeURIComponent(text);
 }
