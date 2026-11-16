@@ -516,10 +516,10 @@ describe('security hardening', () => {
   });
 
   it('compares the HTTP token in constant time and refuses unsafe trust configurations', () => {
-    const config = { host: '127.0.0.1', port: 0, maxBodyBytes: 1, httpToken: 's3cret' };
+    const config = { host: '127.0.0.1', port: 0, maxBodyBytes: 1, httpToken: 's3cret'.padEnd(32, '0') };
     const req = (authorization?: string) => ({ headers: { authorization } }) as unknown as IncomingMessage;
-    expect(() => assertAuthorized(req('Bearer s3cret'), config)).not.toThrow();
-    expect(() => assertAuthorized(req('Bearer s3cre'), config)).toThrow(HttpRequestError);
+    expect(() => assertAuthorized(req(`Bearer ${config.httpToken}`), config)).not.toThrow();
+    expect(() => assertAuthorized(req(`Bearer ${config.httpToken.slice(1)}`), config)).toThrow(HttpRequestError);
     expect(() => assertAuthorized(req(undefined), config)).toThrow(HttpRequestError);
     expect(constantTimeEquals('a', 'a')).toBe(true);
     expect(constantTimeEquals('a', 'ab')).toBe(false);

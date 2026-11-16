@@ -13,9 +13,9 @@ import { assertWritesEnabled } from './policy.js';
  *   prepared by the same user, echoed back with its hash, and whose steps
  *   still pass the allowlist — then runs the steps in order.
  *
- * The gateway can gate intempus_commit_prepared_operation with a duty
- * group (hosts.json toolGroups), so preparing and committing can be
- * separate privileges.
+ * A gateway in front can restrict intempus_commit_prepared_operation to a
+ * separate group of users, so preparing and committing can be separate
+ * privileges.
  */
 
 /**

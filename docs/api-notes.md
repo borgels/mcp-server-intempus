@@ -17,7 +17,7 @@ Verified against a production Intempus account on 2026-09-29, with read-only GET
 
 ## Account-specific findings that shape the design
 
-- The Intempus `email` is often a private address, so self-service needs the Intempus username or work email set to the Entra UPN, or an `INTEMPUS_IDENTITY_MAP` entry.
+- The Intempus `email` is often a private address, so self-service needs the Intempus username or work email set to the user's sign-in address (UPN), or an `INTEMPUS_IDENTITY_MAP` entry.
 - Approver levels (`responsible`) can exist without any `responsible_for_*` assignments. The approver endpoint then shows nobody until assignments are made, or `INTEMPUS_APPROVER_UNASSIGNED_SCOPE=all` is set.
 - Some work models have no work types, so employees on them cannot register time at all.
 - `employee.contract` embeds full contract objects (`start_date`, `end_date`, `locked_date`, `work_model`, `work_model_name`).

@@ -1,6 +1,49 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+HTTP transport, upstream client and supply chain.
+
+- HTTP transport fails closed: it refuses to start on a non-loopback bind, or
+  with `MCP_ALLOW_ANY_ORIGIN=true`, unless `MCP_HTTP_TOKEN` is set.
+  `MCP_HTTP_ALLOW_UNAUTHENTICATED=true` is an explicit escape hatch.
+- `MCP_HTTP_TOKEN` must be at least 32 printable ASCII characters without
+  whitespace.
+- Failed authentication is limited per client address (429 with
+  `Retry-After`; `MCP_AUTH_FAILURE_LIMIT`, `MCP_AUTH_FAILURE_WINDOW_MS`).
+  Requests with a valid token are never throttled.
+- `Host` header check on loopback binds (`MCP_ALLOWED_HOSTS` to override).
+- 401 responses carry `WWW-Authenticate: Bearer`; invalid JSON gets 400
+  instead of 500; oversized bodies get 413 before they are read.
+- `GET /healthz` (unauthenticated) and graceful shutdown on SIGTERM/SIGINT.
+- `PORT`, `MCP_MAX_BODY_BYTES` and boolean flags are validated at startup.
+- CI runs on pull requests and before every image publish; images are only
+  published from `main` and `v*` tags, with SBOM and provenance attestations.
+  GitHub Actions are pinned to commit SHAs.
+- Dependency updates; `npm audit --omit=dev` is clean.
+- Upstream requests no longer follow redirects, so the API key in the
+  `Authorization` header is never resent to a redirect target; a redirect is
+  reported as an error. Upstream error bodies are read up to 64 KB.
+- `INTEMPUS_TIMEOUT_MS` is validated (1-600000) instead of becoming `NaN`.
+- The server reports the package version.
+- Removed a stray API response sample (`wc.json`) from the repository root.
+
+### Upgrade notes
+
+- A deployment that binds a non-loopback address (for example `0.0.0.0` in a
+  container) now needs `MCP_HTTP_TOKEN` of at least 32 characters, or the
+  server exits at startup. A 64-character hex token (`openssl rand -hex 32`)
+  works unchanged.
+- Shorter tokens, tokens with whitespace or a trailing newline, and
+  non-numeric or out-of-range numeric settings are rejected at startup.
+- New optional variables: `MCP_HTTP_ALLOW_UNAUTHENTICATED`,
+  `MCP_ALLOWED_HOSTS`, `MCP_AUTH_FAILURE_LIMIT`, `MCP_AUTH_FAILURE_WINDOW_MS`.
+- `INTEMPUS_TIMEOUT_MS` must be an integer between 1 and 600000.
+- `INTEMPUS_TRUST_FORWARDED_USER`, `X-MCP-User` and `X-MCP-Roles` behave as
+  before.
+
+Also in this release:
+
 
 - Security hardening:
   - Self-service and admin edits/deletes of a work report are refused when the report's current date is inside the contract's locked period (previously only the new date was checked).
@@ -13,7 +56,7 @@
 ## 0.2.0
 
 - One endpoint instead of one per profile. With `INTEMPUS_PROFILE=roles`, each request carries the user's roles in `X-MCP-Roles`.
-  - The the server gateway derives the header from Entra groups (a `roles` table in `hosts.json`), and it is trusted only with `INTEMPUS_TRUST_FORWARDED_USER=true`.
+  - The gateway derives the header from the user's groups, and it is trusted only with `INTEMPUS_TRUST_FORWARDED_USER=true`.
   - The tools offered are the union of the user's roles (employee, approver, admin), and a user with no role gets 403.
   - A fixed role or comma list in `INTEMPUS_PROFILE` still works (stdio).
 - `intempus_whoami` reports `roles` instead of `profile`.
@@ -23,7 +66,7 @@
 Initial release.
 
 - Three profiles from one image (INTEMPUS_PROFILE), each meant for its own
-  hostname and Entra security group:
+  endpoint and user group:
   - "employee": self-service pinned to the requesting user — profile and
     contracts, own time registrations (list/register/edit/delete while
     unapproved and unlocked), balances (saldi) and planning.
@@ -45,7 +88,7 @@ Initial release.
   model, interval times, project case) so failures are specific.
 - Identity: gateway UPN → exactly one Intempus employee by identity map,
   username or work email (never the private email); fails closed.
-- Writes gated by INTEMPUS_ENABLE_WRITES=true; JSONL audit with the Entra
+- Writes gated by INTEMPUS_ENABLE_WRITES=true; JSONL audit with the signed-in
   user, since Intempus records every change as the API user.
 - Client: ApiKey auth, cursor paging with offset fallback for resources
   that reject it, one wait on 429 Retry-After, creation_id idempotency,

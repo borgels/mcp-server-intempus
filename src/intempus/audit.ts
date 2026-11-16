@@ -18,7 +18,7 @@ export interface IntempusAuditEvent {
 
 /**
  * Intempus' own history records every change as the API user, so this log
- * is what ties a change to the Entra user who actually made it. Arguments
+ * is what ties a change to the signed-in user who actually made it. Arguments
  * are hashed, never stored.
  */
 export async function writeAuditEvent(event: IntempusAuditEvent): Promise<void> {

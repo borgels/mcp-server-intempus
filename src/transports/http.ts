@@ -1,109 +1,38 @@
-import { createServer as createNodeServer } from 'node:http';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createServer as createMcpServer } from '../server.js';
-import { parseRoles, rolesFromGateway } from '../intempus/policy.js';
-import {
-  assertAllowedOrigin,
-  assertAuthorized,
-  assertSafeHttpStartup,
-  corsHeaders,
-  forwardedHeadersTrusted,
-  getHttpConfig,
-  HttpRequestError,
-  readJsonBody,
-  sendJson,
-} from './http-helpers.js';
+import { IntempusClient } from '../intempus/client.js';
+import { assertSafeHttpStartup, configWarnings, getHttpConfig, type HttpConfig } from './http-helpers.js';
+import { startHttpServer } from './http-server.js';
 
-assertSafeHttpStartup();
-const config = getHttpConfig();
-const trusted = forwardedHeadersTrusted(config);
-
-const httpServer = createNodeServer(async (req, res) => {
+async function main(): Promise<void> {
+  let config: HttpConfig;
   try {
-    if (req.url !== '/mcp') {
-      sendJson(res, 404, { error: 'Not found' }, req);
-      return;
-    }
-
-    assertAllowedOrigin(req);
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204, corsHeaders(req));
-      res.end();
-      return;
-    }
-
-    if (req.method !== 'POST') {
-      sendJson(res, 405, { error: 'Method not allowed' }, req, { Allow: 'POST' });
-      return;
-    }
-
-    assertAuthorized(req, config);
-    const body = await readJsonBody(req, config.maxBodyBytes);
-
-    // The gateway forwards the Entra-verified user as X-MCP-User; the
-    // stateless per-request server binds it as the Intempus acting
-    // identity. Only honored when the deployment says the header can be
-    // trusted (it never arrives from public traffic — the gateway sets it)
-    // and MCP_HTTP_TOKEN authenticates the gateway.
-    const forwardedUser = trusted
-      ? (firstHeaderValue(req.headers['x-mcp-user']) ?? undefined)
-      : undefined;
-    // Every Intempus change is recorded as the one API user, so a request
-    // without the acting user would be unattributable: refuse it.
-    if (trusted && !forwardedUser) {
-      throw new HttpRequestError(401, 'Missing X-MCP-User from the gateway');
-    }
-
-    // INTEMPUS_PROFILE=roles: one endpoint for everyone; the gateway maps the
-    // user's Entra groups to role names (X-MCP-Roles) and the tools offered
-    // are the union of those roles. Without a trusted gateway, no roles.
-    let roles;
-    if (rolesFromGateway()) {
-      roles = trusted ? parseRoles(firstHeaderValue(req.headers['x-mcp-roles'])) : [];
-      if (roles.length === 0) {
-        throw new HttpRequestError(403, 'No Intempus role for this user (X-MCP-Roles from the gateway)');
-      }
-    }
-
-    const mcpServer = createMcpServer({ onBehalfOf: forwardedUser, roles });
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
-
-    await mcpServer.connect(transport);
-    await transport.handleRequest(req, res, body);
-
-    res.on('close', () => {
-      void transport.close();
-      void mcpServer.close();
-    });
+    config = getHttpConfig();
+    assertSafeHttpStartup(process.env, config);
+    // Validate the Intempus client configuration (base URL, timeout) once at
+    // startup instead of on the first request.
+    new IntempusClient();
   } catch (error) {
-    console.error(error);
-    if (!res.headersSent) {
-      if (error instanceof HttpRequestError) {
-        sendJson(res, error.status, { error: error.message }, req);
-        return;
-      }
-
-      sendJson(res, 500, {
-        jsonrpc: '2.0',
-        error: {
-          code: -32603,
-          message: 'Internal server error',
-        },
-        id: null,
-      }, req);
-    }
+    console.error(
+      `Intempus MCP HTTP server not started: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
   }
-});
 
-function firstHeaderValue(value: string | string[] | undefined): string | undefined {
-  const raw = Array.isArray(value) ? value[0] : value;
-  const trimmed = raw?.trim();
-  return trimmed ? trimmed : undefined;
+  for (const warning of configWarnings(config)) {
+    console.error(warning);
+  }
+
+  const running = await startHttpServer(config);
+  console.error(`Intempus MCP HTTP server listening on http://${config.host}:${running.port}/mcp`);
+
+  const shutdown = (signal: string) => {
+    console.error(`Received ${signal}, shutting down`);
+    void running.close().then(() => process.exit(0));
+  };
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
 }
 
-httpServer.listen(config.port, config.host, () => {
-  console.error(`Intempus MCP HTTP server listening on http://${config.host}:${config.port}/mcp`);
+main().catch(error => {
+  console.error(error);
+  process.exit(1);
 });

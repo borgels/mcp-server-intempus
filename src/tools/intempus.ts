@@ -134,7 +134,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
     'intempus_whoami',
     {
       title: 'Who Am I (Intempus)',
-      description: 'Show your roles here (employee/approver/admin, from your Entra groups) and the Intempus employee (and approver levels) you are linked to.',
+      description: 'Show your roles here (employee/approver/admin, from your groups) and the Intempus employee (and approver levels) you are linked to.',
       inputSchema: {},
       annotations: READ_TOOL_ANNOTATIONS,
     },
@@ -453,7 +453,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
         'create: new employee (optionally with a first contract via workModelId + contractStartDate). update: change master data. ' +
         'offboard: end open contracts on `date` (no time can be registered after it) and revoke backend/approval logins — this is how an employee is removed: ' +
         'Intempus refuses to delete an employee that has a user profile, and every employee gets one. ' +
-        'Set username or email to the Entra sign-in address so self-service can find the employee.',
+        'Set username or email to the sign-in address so self-service can find the employee.',
       inputSchema: {
         action: z.enum(['create', 'update', 'offboard']),
         employeeId: idSchema.optional().describe('Required for update/offboard.'),
@@ -491,7 +491,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
           if (input.action === 'create') {
             if (!input.name) throw new Error('name is required to create an employee.');
             const username = input.username ?? input.email;
-            if (!username) throw new Error('username (or email, used as username) is required to create an employee — use the Entra sign-in address.');
+            if (!username) throw new Error('username (or email, used as username) is required to create an employee — use the sign-in address.');
             await assertUniqueEmployee(client, input);
             const generated = input.password === undefined;
             const created = await createOrUpdate(
