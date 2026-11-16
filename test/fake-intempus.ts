@@ -131,11 +131,11 @@ export function seed(): Record<string, Row[]> {
     resource_uri: uri('contract', id),
   });
   return {
-    company: [{ id: 5, name: 'ONE' }],
+    company: [{ id: 5, name: 'Acme' }],
     employee: [
-      { id: 1, number: '1', name: 'Ann', username: 'ann@one.dk', email: 'ann@one.dk', company: uri('company', 5), active_contract: true, contract: [contract(101, 1)] },
-      { id: 2, number: '2', name: 'Bo', username: 'bo123', email: 'Bo@One.dk', personal_email: 'bo@gmail.com', company: uri('company', 5), active_contract: true, contract: [contract(102, 2)] },
-      { id: 3, number: '3', name: 'Cy', username: 'cy', email: '', personal_email: 'cy@one.dk', company: uri('company', 5), active_contract: true, contract: [contract(103, 3, 11)] },
+      { id: 1, number: '1', name: 'Ann', username: 'ann@example.com', email: 'ann@example.com', company: uri('company', 5), active_contract: true, contract: [contract(101, 1)] },
+      { id: 2, number: '2', name: 'Bo', username: 'bo123', email: 'Bo@Example.com', personal_email: 'bo@gmail.com', company: uri('company', 5), active_contract: true, contract: [contract(102, 2)] },
+      { id: 3, number: '3', name: 'Cy', username: 'cy', email: '', personal_email: 'cy@example.com', company: uri('company', 5), active_contract: true, contract: [contract(103, 3, 11)] },
     ],
     contract: [contract(101, 1), contract(102, 2), contract(103, 3, 11)],
     responsible: [{ id: 700, employee: uri('employee', 1), level: 'final_approver' }],

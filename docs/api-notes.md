@@ -17,7 +17,7 @@ Verified against a production Intempus account on 2026-09-29, with read-only GET
 
 ## Account-specific findings that shape the design
 
-- The Intempus `email` is often a private address, so self-service needs the Intempus username or work email set to the Entra UPN, or an `INTEMPUS_IDENTITY_MAP` entry.
+- The Intempus `email` is often a private address, so self-service needs the Intempus username or work email set to the user's sign-in address (UPN), or an `INTEMPUS_IDENTITY_MAP` entry.
 - Approver levels (`responsible`) can exist without any `responsible_for_*` assignments. The approver endpoint then shows nobody until assignments are made, or `INTEMPUS_APPROVER_UNASSIGNED_SCOPE=all` is set.
 - Some work models have no work types, so employees on them cannot register time at all.
 - `employee.contract` embeds full contract objects (`start_date`, `end_date`, `locked_date`, `work_model`, `work_model_name`).
@@ -32,7 +32,7 @@ Verified against a production Intempus account on 2026-09-29, with read-only GET
   - `approved_by_initial` / `approved_by_final` expect a **userprofile** URI. An employee URI gives 404 "An incorrect URL was provided … for the 'UserProfileResource' resource".
   - Setting both, with the approver holding `final_approver` and assigned to the employee via `responsible_for_employee`, still leaves `approved=false`, also after 8 seconds.
   - Reports approved in the UI have `approved_by_final: null`. The approval lives elsewhere, and `historical_work_report` has no approval fields.
-- Locking with `POST work_report/bulk/ {ids, origin, immutable, action: "work_report_state"}` needs `origin` (400 `'origin'` without it). Even then it gives 401 "Work report state can only be updated if the feature is enabled", so the feature is off on ONE's account.
+- Locking with `POST work_report/bulk/ {ids, origin, immutable, action: "work_report_state"}` needs `origin` (400 `'origin'` without it). Even then it gives 401 "Work report state can only be updated if the feature is enabled", so the feature is not enabled on every account.
 - The period lock works: PATCH `contract.locked_date`, verified. Registering inside the locked period is refused.
 - Validation errors seen:
   - "Start- og sluttid skal være angivet for denne arbejdstype" (a work type with `report_interval`)

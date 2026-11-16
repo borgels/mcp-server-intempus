@@ -104,8 +104,8 @@ describe('client', () => {
   });
 
   it('redacts ApiKey credentials', () => {
-    expect(redactSecrets('Authorization: ApiKey Abo@X.dk:abc123 failed')).not.toContain('abc123');
-    expect(redactSecrets('sent ApiKey Abo@X.dk:abc123')).not.toContain('abc123');
+    expect(redactSecrets('Authorization: ApiKey User@example.com:abc123 failed')).not.toContain('abc123');
+    expect(redactSecrets('sent ApiKey User@example.com:abc123')).not.toContain('abc123');
     expect(redactSecrets('INTEMPUS_API_KEY=abc123')).not.toContain('abc123');
   });
 
@@ -173,7 +173,7 @@ describe('policy', () => {
 describe('roles from the gateway', () => {
   it('registers the union of the roles passed per request', async () => {
     const fake = new FakeIntempus(seed());
-    const server = createServer({ client: fake.client(), onBehalfOf: 'ann@one.dk', roles: ['employee', 'approver'] });
+    const server = createServer({ client: fake.client(), onBehalfOf: 'ann@example.com', roles: ['employee', 'approver'] });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
     const client = new Client({ name: 'test', version: '0.0.0' });
@@ -186,7 +186,7 @@ describe('roles from the gateway', () => {
   });
 
   it('offers nothing without a role', async () => {
-    const server = createServer({ client: new FakeIntempus(seed()).client(), onBehalfOf: 'ann@one.dk', roles: [] });
+    const server = createServer({ client: new FakeIntempus(seed()).client(), onBehalfOf: 'ann@example.com', roles: [] });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
     const client = new Client({ name: 'test', version: '0.0.0' });
@@ -198,31 +198,31 @@ describe('roles from the gateway', () => {
 describe('identity (fail-closed)', () => {
   it('matches username, then work email, case-insensitively', async () => {
     const client = new FakeIntempus(seed()).client();
-    await expect(resolveEmployee(client, 'ANN@one.dk')).resolves.toMatchObject({ employeeId: 1, matchedBy: 'username' });
-    await expect(resolveEmployee(client, 'bo@one.dk')).resolves.toMatchObject({ employeeId: 2, matchedBy: 'email' });
+    await expect(resolveEmployee(client, 'ANN@example.com')).resolves.toMatchObject({ employeeId: 1, matchedBy: 'username' });
+    await expect(resolveEmployee(client, 'bo@example.com')).resolves.toMatchObject({ employeeId: 2, matchedBy: 'email' });
   });
 
   it('never matches on the private email', async () => {
     const client = new FakeIntempus(seed()).client();
     await expect(resolveEmployee(client, 'bo@gmail.com')).rejects.toThrow(/No Intempus employee matches/);
-    await expect(resolveEmployee(client, 'cy@one.dk')).rejects.toThrow(/No Intempus employee matches/);
+    await expect(resolveEmployee(client, 'cy@example.com')).rejects.toThrow(/No Intempus employee matches/);
   });
 
   it('uses INTEMPUS_IDENTITY_MAP before anything else', async () => {
-    process.env.INTEMPUS_IDENTITY_MAP = JSON.stringify({ 'cy@one.dk': '3' });
+    process.env.INTEMPUS_IDENTITY_MAP = JSON.stringify({ 'cy@example.com': '3' });
     const client = new FakeIntempus(seed()).client();
-    await expect(resolveEmployee(client, 'Cy@One.dk')).resolves.toMatchObject({ employeeId: 3, matchedBy: 'identity_map' });
+    await expect(resolveEmployee(client, 'Cy@Example.com')).resolves.toMatchObject({ employeeId: 3, matchedBy: 'identity_map' });
   });
 
   it('refuses ambiguous matches', async () => {
     const data = seed();
     data.employee!.push({ ...data.employee![0]!, id: 4, number: '4' });
-    await expect(resolveEmployee(new FakeIntempus(data).client(), 'ann@one.dk')).rejects.toThrow(/refusing to guess/);
+    await expect(resolveEmployee(new FakeIntempus(data).client(), 'ann@example.com')).rejects.toThrow(/refusing to guess/);
   });
 });
 
 describe('approver scope', () => {
-  const me = async (fake: FakeIntempus, upn = 'ann@one.dk') => {
+  const me = async (fake: FakeIntempus, upn = 'ann@example.com') => {
     const client = fake.client();
     return { client, scope: new ApproverScope(client, await resolveEmployee(client, upn)) };
   };
@@ -253,7 +253,7 @@ describe('approver scope', () => {
   });
 
   it('rejects users without an approver level', async () => {
-    const { scope } = await me(new FakeIntempus(seed()), 'bo@one.dk');
+    const { scope } = await me(new FakeIntempus(seed()), 'bo@example.com');
     await expect(scope.load()).rejects.toThrow(/not registered as an approver/);
   });
 });
@@ -265,7 +265,7 @@ describe('employee profile tools', () => {
   });
 
   it('exposes only self-service tools', async () => {
-    const { client } = await connect(new FakeIntempus(seed()), 'bo@one.dk');
+    const { client } = await connect(new FakeIntempus(seed()), 'bo@example.com');
     const names = (await client.listTools()).tools.map(tool => tool.name);
     expect(names).toContain('intempus_register_time');
     expect(names).not.toContain('intempus_list_employees');
@@ -281,7 +281,7 @@ describe('employee profile tools', () => {
 
   it('pins registrations to the caller and computes hours from times', async () => {
     const fake = new FakeIntempus(seed());
-    const { call } = await connect(fake, 'bo@one.dk');
+    const { call } = await connect(fake, 'bo@example.com');
     const result = await call('intempus_register_time', {
       date: '2026-09-29',
       caseId: 60,
@@ -301,13 +301,13 @@ describe('employee profile tools', () => {
       start_time: '07:00:00',
       end_time: '15:30:00',
       amount: 8,
-      creation_id: nameUuid('bo@one.dk|2|retry-safe-1'),
+      creation_id: nameUuid('bo@example.com|2|retry-safe-1'),
     });
   });
 
   it('refuses a work type from another work model, a closed case and a locked period', async () => {
     const fake = new FakeIntempus(seed());
-    const { call } = await connect(fake, 'bo@one.dk');
+    const { call } = await connect(fake, 'bo@example.com');
     expect((await call('intempus_register_time', { date: '2026-09-29', workTypeId: 51, hours: 1 })).text).toContain('work model');
     expect((await call('intempus_register_time', { date: '2026-09-29', workTypeId: 50, caseId: 61, hours: 1 })).text).toContain('closed');
     expect((await call('intempus_register_time', { date: '2026-03-02', workTypeId: 50, hours: 1 })).text).toContain('locked');
@@ -317,7 +317,7 @@ describe('employee profile tools', () => {
 
   it('knows Intempus\' own rules: interval work types need times, project work needs a case', async () => {
     const fake = new FakeIntempus(seed());
-    const { call } = await connect(fake, 'bo@one.dk');
+    const { call } = await connect(fake, 'bo@example.com');
     expect((await call('intempus_register_time', { date: '2026-09-29', workTypeId: 52, caseId: 60, hours: 2 })).text).toContain('requires startTime and endTime');
     expect((await call('intempus_register_time', { date: '2026-09-29', workTypeId: 52, startTime: '07:00', endTime: '09:00' })).text).toContain('needs a caseId');
     expect((await call('intempus_register_time', { date: '2026-09-29', workTypeId: 52, caseId: 60, startTime: '07:00', endTime: '09:00' })).isError).toBe(false);
@@ -325,7 +325,7 @@ describe('employee profile tools', () => {
 
   it('cannot touch other people\'s reports and cannot edit approved ones', async () => {
     const fake = new FakeIntempus(seed());
-    const { call } = await connect(fake, 'bo@one.dk');
+    const { call } = await connect(fake, 'bo@example.com');
     const foreign = await call('intempus_delete_my_work_report', { workReportId: 902 });
     expect(foreign.text).toContain('not found among your registrations');
     const approved = await call('intempus_update_my_work_report', { workReportId: 901, hours: 6 });
@@ -339,7 +339,7 @@ describe('employee profile tools', () => {
   it('refuses writes when the instance is read-only', async () => {
     process.env.INTEMPUS_ENABLE_WRITES = 'false';
     const fake = new FakeIntempus(seed());
-    const { call } = await connect(fake, 'bo@one.dk');
+    const { call } = await connect(fake, 'bo@example.com');
     const result = await call('intempus_register_time', { date: '2026-09-29', workTypeId: 50, hours: 1 });
     expect(result.text).toContain('INTEMPUS_ENABLE_WRITES');
     expect(fake.writes()).toHaveLength(0);
@@ -353,7 +353,7 @@ describe('approver profile tools', () => {
   });
 
   it('has no approval tools: the public API cannot approve', async () => {
-    const { client } = await connect(new FakeIntempus(seed()), 'ann@one.dk');
+    const { client } = await connect(new FakeIntempus(seed()), 'ann@example.com');
     const names = (await client.listTools()).tools.map(tool => tool.name);
     expect(names).toContain('intempus_list_team_work_reports');
     expect(names.some(name => name.includes('approve'))).toBe(false);
@@ -361,7 +361,7 @@ describe('approver profile tools', () => {
 
   it('lists only team reports and refuses employees outside the scope', async () => {
     const fake = new FakeIntempus(seed());
-    const { call } = await connect(fake, 'ann@one.dk');
+    const { call } = await connect(fake, 'ann@example.com');
     const team = await call('intempus_list_team_work_reports', { status: 'all', from: '2026-09-01', to: '2026-09-30' });
     expect(team.data.workReports.map((row: { id: number }) => row.id).sort()).toEqual([900, 901]);
     const other = await call('intempus_list_team_work_reports', { employeeId: 3 });
@@ -377,7 +377,7 @@ describe('admin profile tools', () => {
 
   it('prepares a signed delete without changing anything, then commits it', async () => {
     const fake = new FakeIntempus(seed());
-    const { call } = await connect(fake, 'admin@one.dk');
+    const { call } = await connect(fake, 'admin@example.com');
     const prepared = await call('intempus_prepare_admin_change', { change: { kind: 'delete', resource: 'case', ids: [61] }, reason: 'test' });
     expect(prepared.isError).toBe(false);
     expect(prepared.data.preview).toEqual([expect.objectContaining({ id: 61, name: '2600 - Lukket' })]);
@@ -393,7 +393,7 @@ describe('admin profile tools', () => {
 
   it('does not offer deleting employees (Intempus refuses it); offboarding ends contracts and logins', async () => {
     const fake = new FakeIntempus(seed());
-    const { call } = await connect(fake, 'admin@one.dk');
+    const { call } = await connect(fake, 'admin@example.com');
     expect((await call('intempus_prepare_admin_change', { change: { kind: 'delete', resource: 'employee', ids: [3] }, reason: 'x' })).isError).toBe(true);
     const off = await call('intempus_manage_employee', { action: 'offboard', employeeId: 2, date: '2026-10-31' });
     expect(off.data).toMatchObject({ endedContracts: [{ contractId: 102, endDate: '2026-10-31' }], loginsRevoked: true });
@@ -402,7 +402,7 @@ describe('admin profile tools', () => {
 
   it('refuses tampered, foreign or unconfirmed operations', async () => {
     const fake = new FakeIntempus(seed());
-    const admin = await connect(fake, 'admin@one.dk');
+    const admin = await connect(fake, 'admin@example.com');
     const prepared = (await admin.call('intempus_prepare_admin_change', {
       change: { kind: 'delete', resource: 'case', ids: [61] },
       reason: 'test',
@@ -413,7 +413,7 @@ describe('admin profile tools', () => {
 
     expect((await admin.call('intempus_commit_prepared_operation', { operation: prepared, confirmOperationHash: 'a'.repeat(64) })).text).toContain('confirmOperationHash');
 
-    const other = await connect(fake, 'other-admin@one.dk');
+    const other = await connect(fake, 'other-admin@example.com');
     expect((await other.call('intempus_commit_prepared_operation', { operation: prepared, confirmOperationHash: prepared.operationHash })).text).toContain('another user');
 
     expect(fake.writes()).toHaveLength(0);
@@ -421,27 +421,27 @@ describe('admin profile tools', () => {
 
   it('creates an employee without echoing the generated password', async () => {
     const fake = new FakeIntempus(seed());
-    const { call } = await connect(fake, 'admin@one.dk');
-    const result = await call('intempus_manage_employee', { action: 'create', name: 'Dee', number: '4', email: 'dee@one.dk', workModelId: 10 });
+    const { call } = await connect(fake, 'admin@example.com');
+    const result = await call('intempus_manage_employee', { action: 'create', name: 'Dee', number: '4', email: 'dee@example.com', workModelId: 10 });
     expect(result.isError).toBe(false);
     const post = fake.writes().find(write => write.method === 'POST' && write.path === 'employee/')!;
     const body = post.body as { password: string; password_generation: number; username: string };
-    expect(body).toMatchObject({ username: 'dee@one.dk', password_generation: 1 });
+    expect(body).toMatchObject({ username: 'dee@example.com', password_generation: 1 });
     expect(result.text).not.toContain(body.password);
     expect(fake.writes().some(write => write.path === 'contract/')).toBe(true);
   });
 
   it('refuses duplicate employee identity and duplicate cases', async () => {
     const fake = new FakeIntempus(seed());
-    const { call } = await connect(fake, 'admin@one.dk');
-    expect((await call('intempus_manage_employee', { action: 'create', name: 'X', email: 'ANN@one.dk' })).text).toContain('already used');
+    const { call } = await connect(fake, 'admin@example.com');
+    expect((await call('intempus_manage_employee', { action: 'create', name: 'X', email: 'ANN@example.com' })).text).toContain('already used');
     expect((await call('intempus_manage_case', { action: 'create', projectNumber: '2636', name: 'Skovvej', customerId: 1 })).text).toContain('already exists');
     expect(fake.writes()).toHaveLength(0);
   });
 
   it('registers time for another employee', async () => {
     const fake = new FakeIntempus(seed());
-    const { call } = await connect(fake, 'admin@one.dk');
+    const { call } = await connect(fake, 'admin@example.com');
     const result = await call('intempus_manage_work_report', { action: 'create', employeeId: 3, date: '2026-09-29', workTypeId: 51, hours: 4 });
     expect(result.isError).toBe(false);
     expect(fake.writes()[0]?.body).toMatchObject({ employee: uri('employee', 3), amount: 4 });
@@ -450,7 +450,7 @@ describe('admin profile tools', () => {
   it('reads allowlisted resources only and strips credentials', async () => {
     const fake = new FakeIntempus(seed());
     fake.db.employee![0]!.password = 'hash';
-    const { call } = await connect(fake, 'admin@one.dk');
+    const { call } = await connect(fake, 'admin@example.com');
     const employee = await call('intempus_get_resource', { resource: 'employee', id: 1 });
     expect(employee.data.password).toBeUndefined();
     expect((await call('intempus_get_resource', { resource: 'api_key' })).isError).toBe(true);
@@ -468,7 +468,7 @@ describe('security hardening', () => {
     process.env.INTEMPUS_PROFILE = 'employee';
     const fake = new FakeIntempus(seed());
     fake.db.work_report!.push({ resource_uri: uri('work_report', 950), ...lockedReport });
-    const { call } = await connect(fake, 'bo@one.dk');
+    const { call } = await connect(fake, 'bo@example.com');
     const deleted = await call('intempus_delete_my_work_report', { workReportId: 950 });
     expect(deleted.isError).toBe(true);
     expect(deleted.text).toContain('locked');
@@ -482,7 +482,7 @@ describe('security hardening', () => {
     process.env.INTEMPUS_PROFILE = 'admin';
     const fake = new FakeIntempus(seed());
     fake.db.work_report!.push({ resource_uri: uri('work_report', 950), ...lockedReport });
-    const { call } = await connect(fake, 'admin@one.dk');
+    const { call } = await connect(fake, 'admin@example.com');
     expect((await call('intempus_manage_work_report', { action: 'update', workReportId: 950, date: '2026-09-29' })).text).toContain('locked');
     expect((await call('intempus_manage_work_report', { action: 'delete', workReportId: 900 })).isError).toBe(true);
     expect((await call('intempus_manage_schedule', { action: 'delete', scheduleId: 1 })).isError).toBe(true);
@@ -492,7 +492,7 @@ describe('security hardening', () => {
   it('accepts tastypie filter keys with a linear-time pattern', async () => {
     process.env.INTEMPUS_PROFILE = 'admin';
     const fake = new FakeIntempus(seed());
-    const { call } = await connect(fake, 'admin@one.dk');
+    const { call } = await connect(fake, 'admin@example.com');
     expect((await call('intempus_get_resource', { resource: 'work_report', filters: { start_date__gte: '2026-09-01' } })).isError).toBe(false);
     const started = Date.now();
     const evil = await call('intempus_get_resource', { resource: 'work_report', filters: { [`${'_'.repeat(90)}!`]: 1 } });
@@ -510,16 +510,16 @@ describe('security hardening', () => {
   });
 
   it('derives creation ids with SHA-256 (version 8 UUIDs), deterministically', () => {
-    const id = nameUuid('bo@one.dk|2|retry-safe-1');
+    const id = nameUuid('bo@example.com|2|retry-safe-1');
     expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    expect(nameUuid('bo@one.dk|2|retry-safe-1')).toBe(id);
+    expect(nameUuid('bo@example.com|2|retry-safe-1')).toBe(id);
   });
 
   it('compares the HTTP token in constant time and refuses unsafe trust configurations', () => {
-    const config = { host: '127.0.0.1', port: 0, maxBodyBytes: 1, httpToken: 's3cret' };
+    const config = { host: '127.0.0.1', port: 0, maxBodyBytes: 1, httpToken: 's3cret'.padEnd(32, '0') };
     const req = (authorization?: string) => ({ headers: { authorization } }) as unknown as IncomingMessage;
-    expect(() => assertAuthorized(req('Bearer s3cret'), config)).not.toThrow();
-    expect(() => assertAuthorized(req('Bearer s3cre'), config)).toThrow(HttpRequestError);
+    expect(() => assertAuthorized(req(`Bearer ${config.httpToken}`), config)).not.toThrow();
+    expect(() => assertAuthorized(req(`Bearer ${config.httpToken.slice(1)}`), config)).toThrow(HttpRequestError);
     expect(() => assertAuthorized(req(undefined), config)).toThrow(HttpRequestError);
     expect(constantTimeEquals('a', 'a')).toBe(true);
     expect(constantTimeEquals('a', 'ab')).toBe(false);

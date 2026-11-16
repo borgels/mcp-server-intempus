@@ -22,7 +22,7 @@
  *
  * Where roles come from (INTEMPUS_PROFILE):
  *  - "roles": per request from X-MCP-Roles, which the gateway derives from
- *    the user's Entra security groups (hosts.json `roles`). Honored only
+ *    the user's groups in its identity provider. Honored only
  *    together with INTEMPUS_TRUST_FORWARDED_USER=true; none → nothing.
  *  - a fixed role or comma list ("employee", "admin", "employee,approver"):
  *    the same roles for every request (stdio, single-purpose instances).
