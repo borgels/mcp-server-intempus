@@ -50,7 +50,7 @@ export function clearEmployeeCache(): void {
 }
 
 /**
- * Explicit Entra UPN → Intempus employee number overrides, for employees
+ * Explicit sign-in address (UPN) → Intempus employee number overrides, for employees
  * whose Intempus username/email is not their UPN (many have a private
  * email in Intempus). INTEMPUS_IDENTITY_MAP holds inline JSON, or
  * INTEMPUS_IDENTITY_MAP_PATH points at a JSON file:

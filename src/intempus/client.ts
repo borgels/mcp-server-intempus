@@ -1,3 +1,4 @@
+import { readEnvInteger } from '../config-env.js';
 import { IntempusHttpError } from '../errors.js';
 
 export interface IntempusClientOptions {
@@ -45,7 +46,7 @@ const OFFSET_ONLY_RESOURCES = new Set(['explored_employee_balance', 'schedule'])
  *
  * Auth is `Authorization: ApiKey <username>:<key>`. The key belongs to an
  * Intempus user and every call runs with that user's rights; the username
- * is case-sensitive (verified 2026-09-29: "Abo@…" works, "abo@…" is 401).
+ * is case-sensitive (verified 2026-09-29: "User@…" works, "user@…" is 401).
  *
  * Relations travel as resource URIs ("/web/v1/employee/12/"); `path()`
  * accepts either a relative resource path ("employee/12/") or such a URI.
@@ -70,7 +71,8 @@ export class IntempusClient {
     assertSafeBaseUrl(this.baseUrl);
     this.uriPrefix = `${new URL(this.baseUrl).pathname.replace(/\/+$/, '')}/`;
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.timeoutMs = options.timeoutMs ?? Number(process.env.INTEMPUS_TIMEOUT_MS ?? 30_000);
+    this.timeoutMs =
+      options.timeoutMs ?? readEnvInteger('INTEMPUS_TIMEOUT_MS', 30_000, { min: 1, max: 600_000 });
     this.maxRetryAfterSeconds = options.maxRetryAfterSeconds ?? 10;
   }
 
@@ -188,7 +190,8 @@ export class IntempusClient {
       Accept: 'application/json',
       Authorization: this.authorization(),
     };
-    const init: RequestInit = { method, headers, signal: AbortSignal.timeout(this.timeoutMs) };
+    // Never follow a redirect: the Authorization header carries the API key.
+    const init: RequestInit = { method, headers, redirect: 'manual', signal: AbortSignal.timeout(this.timeoutMs) };
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(body);
@@ -196,6 +199,15 @@ export class IntempusClient {
 
     const response = await this.fetchImpl(url, init);
     const retryAfter = response.headers.get('retry-after') ?? undefined;
+
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new IntempusHttpError({
+        status: response.status,
+        url,
+        fallbackMessage: 'redirect not followed (check INTEMPUS_BASE_URL)',
+      });
+    }
 
     if (response.status === 429 && !isRetry) {
       const seconds = Number(retryAfter ?? 1);
@@ -238,8 +250,20 @@ export function idFromUri(ref: unknown): number | undefined {
   return match ? Number(match[1]) : undefined;
 }
 
+/** Error bodies are read up to this many bytes; the rest is discarded. */
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
+
 async function readBody(response: Response): Promise<unknown> {
-  const text = await response.text();
+  let text: string;
+  if (response.ok) {
+    text = await response.text();
+  } else {
+    const capped = await readTextUpTo(response, MAX_ERROR_BODY_BYTES);
+    if (capped.truncated) {
+      return `${capped.text}... [truncated]`;
+    }
+    text = capped.text;
+  }
   if (!text) {
     return null;
   }
@@ -248,6 +272,32 @@ async function readBody(response: Response): Promise<unknown> {
   } catch {
     return text;
   }
+}
+
+/** Reads at most `limit` bytes of the body as text and cancels the rest. */
+async function readTextUpTo(response: Response, limit: number): Promise<{ text: string; truncated: boolean }> {
+  if (!response.body) {
+    return { text: '', truncated: false };
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let truncated = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (total + value.byteLength > limit) {
+      chunks.push(value.subarray(0, limit - total));
+      truncated = true;
+      await reader.cancel().catch(() => undefined);
+      break;
+    }
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  return { text: Buffer.concat(chunks).toString('utf8'), truncated };
 }
 
 function trimTrailingSlash(value: string): string {

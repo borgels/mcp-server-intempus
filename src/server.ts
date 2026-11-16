@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { IntempusClient, type IntempusClientOptions } from './intempus/client.js';
 import type { IntempusRole } from './intempus/policy.js';
 import { registerIntempusTools } from './tools/intempus.js';
+import { PACKAGE_VERSION } from './version.js';
 
 export interface CreateServerOptions {
   client?: IntempusClient;
@@ -15,7 +16,7 @@ export interface CreateServerOptions {
 export function createServer(options: CreateServerOptions = {}): McpServer {
   const server = new McpServer({
     name: 'intempus',
-    version: '0.2.0',
+    version: PACKAGE_VERSION,
   });
 
   const client = options.client ?? new IntempusClient(options.clientOptions);
