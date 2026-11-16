@@ -70,6 +70,14 @@ See [`.env.example`](.env.example). Minimal production set: `INTEMPUS_API_USER`,
 
 One container (`INTEMPUS_PROFILE=roles`) behind an authenticating MCP gateway. The gateway maps the user's groups to roles (`X-MCP-Roles`: `employee`, `approver`, `admin`) and can restrict `intempus_commit_prepared_operation` to a separate group. Each person's sign-in address must match their Intempus username or work email (or be mapped with `INTEMPUS_IDENTITY_MAP`).
 
+## Install
+
+```bash
+npx mcp-server-intempus
+```
+
+Runs the stdio server from npm. Configure it with the environment variables in `.env.example`.
+
 ## Run
 
 ```bash

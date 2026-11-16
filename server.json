@@ -1,0 +1,56 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.borgels/mcp-server-intempus",
+  "title": "Intempus",
+  "description": "MCP server for Visma Intempus: time registration, approval, balances, cases and planning.",
+  "repository": {
+    "url": "https://github.com/borgels/mcp-server-intempus",
+    "source": "github"
+  },
+  "version": "0.3.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "mcp-server-intempus",
+      "version": "0.3.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "INTEMPUS_API_USER",
+          "description": "Intempus API user (case-sensitive).",
+          "isRequired": true
+        },
+        {
+          "name": "INTEMPUS_API_KEY",
+          "description": "Intempus API key of that user.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "INTEMPUS_DEFAULT_USER",
+          "description": "Acting user over stdio, e.g. your own sign-in address."
+        },
+        {
+          "name": "INTEMPUS_PROFILE",
+          "description": "Role or comma-separated roles: employee, approver, admin.",
+          "default": "employee"
+        },
+        {
+          "name": "INTEMPUS_ENABLE_WRITES",
+          "description": "Enable the write tools.",
+          "format": "boolean",
+          "default": "false"
+        },
+        {
+          "name": "INTEMPUS_AUDIT_LOG",
+          "description": "Path of the JSONL audit log.",
+          "format": "filepath"
+        }
+      ]
+    }
+  ]
+}
