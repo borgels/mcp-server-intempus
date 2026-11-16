@@ -75,8 +75,8 @@ Initial release.
     is responsible for in Intempus. No approval tools: the public API
     cannot approve (verified live).
   - "admin": employees (create/update/offboard), contracts, login access,
-    approvers and responsibilities, time for anyone, cases (bpc naming
-    "<projektnr> - <navn>"), customers, balances, schedules, planned work,
+    approvers and responsibilities, time for anyone, cases (named
+    "<number> - <name>"), customers, balances, schedules, planned work,
     reference data and allowlisted generic reads.
 - Irreversible admin changes (deletes, contract locked dates, work report
   locks where Intempus enables the feature) only via intempus_prepare_admin_change →

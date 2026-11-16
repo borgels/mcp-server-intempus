@@ -291,7 +291,7 @@ export const INTEMPUS_CAPABILITIES: IntempusCapability[] = [
   {
     id: 'intempus_manage_case',
     title: 'Create/Update Case (Intempus, admin)',
-    description: 'Create or update a case/project: name, number, customer, open/closed, budget, responsible. Same naming as bpc ("<projektnr> - <navn>") when projectNumber is given.',
+    description: 'Create or update a case/project: name, number, customer, open/closed, budget, responsible. Named "<number> - <name>" when projectNumber is given.',
     risk: 'write',
     examples: [{ action: 'create', projectNumber: '2640', name: 'Skovvej 3', customerId: 5001 }],
     identifierFormats: ['action: create | update'],

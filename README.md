@@ -44,7 +44,7 @@ Every role gets `intempus_whoami` (shows your roles and linked employee), `intem
 Verified live on 2026-09-29 (details in [docs/api-notes.md](docs/api-notes.md)):
 
 - **Approving time.** `approved` is read-only, and `approved_by_initial` / `approved_by_final` can be set (to a *user profile*) without the report becoming approved. Approval stays in Intempus' web/approval app; the approver role shows what is waiting. Intempus' own MCP server (`mcp.intempus.dk`, needs an `X-Security-Key` from Intempus) advertises bulk approval — the way to get approval into Claude, if wanted.
-- **Locking work reports** (`work_report/bulk/`) needs Intempus' "work report state" feature, which ONE's account does not have (401 "…only be updated if the feature is enabled"). The prepare kind `lock_work_reports` works once Intempus enables it; period locks via the contract's `locked_date` work today.
+- **Locking work reports** (`work_report/bulk/`) needs Intempus' "work report state" feature, which is not enabled on every account (401 "…only be updated if the feature is enabled"). The prepare kind `lock_work_reports` works once Intempus enables it; period locks via the contract's `locked_date` work today.
 - **Deleting employees.** Intempus refuses (409) while a user profile exists, every employee gets one, and user profiles cannot be deleted. Employees are removed by **offboarding**: open contracts end on the last day and backend/approval logins are revoked.
 
 ## Intempus facts this server relies on
@@ -56,7 +56,7 @@ Verified against a production account on 2026-09-29; details in [docs/api-notes.
 - `explored_employee_balance` and `schedule` answer HTTP 500 to cursor pagination; the client falls back to offset paging.
 - Relations are URIs in lists but embedded objects in some detail responses (e.g. `work_type.work_model`); both are handled.
 - Holiday balances accrue at month end: a balance "as of today" does not include this month's accrual yet.
-- Rate limit is 500 requests/minute **per Intempus user**, shared with every integration using the same key (e.g. bpc).
+- Rate limit is 500 requests/minute **per Intempus user**, shared with every integration using the same key.
 
 ## Relation to other Intempus integrations
 

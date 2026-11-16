@@ -46,7 +46,7 @@ const OFFSET_ONLY_RESOURCES = new Set(['explored_employee_balance', 'schedule'])
  *
  * Auth is `Authorization: ApiKey <username>:<key>`. The key belongs to an
  * Intempus user and every call runs with that user's rights; the username
- * is case-sensitive (verified 2026-09-29: "Abo@…" works, "abo@…" is 401).
+ * is case-sensitive (verified 2026-09-29: "User@…" works, "user@…" is 401).
  *
  * Relations travel as resource URIs ("/web/v1/employee/12/"); `path()`
  * accepts either a relative resource path ("employee/12/") or such a URI.
