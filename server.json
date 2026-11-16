@@ -32,11 +32,12 @@
         },
         {
           "name": "INTEMPUS_DEFAULT_USER",
-          "description": "Acting user over stdio, e.g. your own sign-in address."
+          "description": "Required for the employee and approver roles (employee is the default): your sign-in address or Intempus username, which those tools act as over stdio.",
+          "placeholder": "you@example.com"
         },
         {
           "name": "INTEMPUS_PROFILE",
-          "description": "Role or comma-separated roles: employee, approver, admin.",
+          "description": "Role or comma-separated roles: employee, approver, admin. Employee and approver need INTEMPUS_DEFAULT_USER.",
           "default": "employee"
         },
         {
