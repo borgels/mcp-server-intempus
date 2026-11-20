@@ -13,6 +13,7 @@ import {
   workTypeView,
 } from './format.js';
 import { contractOn, contractsOf, listEmployeesCached, type ContractSummary } from './identity.js';
+import { IntempusToolError } from '../errors.js';
 import { assertWritesEnabled } from './policy.js';
 
 // ---------------------------------------------------------------- reads
@@ -311,7 +312,7 @@ export async function deleteTime(client: IntempusClient, existing: IntempusObjec
   // Read the owner's contracts fresh so the locked date is current.
   const ownerId = idFromUri(existing.employee) ?? Number(existing.employee_id);
   if (!Number.isInteger(ownerId) || ownerId <= 0) {
-    throw new Error(`Work report ${String(existing.id)} has no readable employee; refusing to delete it.`);
+    throw new IntempusToolError(`Work report ${idText(existing.id)} has no readable employee; refusing to delete it.`);
   }
   const owner = await client.get<IntempusObject>(`employee/${pathSegment(ownerId)}/`);
   assertExistingNotLocked(contractsOf(owner), existing);
@@ -325,37 +326,42 @@ export async function deleteTime(client: IntempusClient, existing: IntempusObjec
  * or the report has no readable date.
  */
 export function assertExistingNotLocked(contracts: ContractSummary[], existing: IntempusObject): void {
-  const date = typeof existing.start_date === 'string' ? existing.start_date : undefined;
+  const stored = existing.start_date;
+  const date = typeof stored === 'string' && dateText(stored) === stored ? stored : undefined;
   if (!date) {
-    throw new Error(`Work report ${String(existing.id)} has no readable date; refusing to change it.`);
+    throw new IntempusToolError(`Work report ${idText(existing.id)} has no readable date; refusing to change it.`);
   }
   const contract = contractOn(contracts, date);
   if (!contract) {
-    throw new Error(`Work report ${String(existing.id)} (${date}) is not covered by a contract; its period lock cannot be checked, so it cannot be changed here.`);
+    throw new IntempusToolError(`Work report ${idText(existing.id)} (${dateText(date)}) is not covered by a contract; its period lock cannot be checked, so it cannot be changed here.`);
   }
   if (contract.lockedDate && date <= contract.lockedDate) {
-    throw new Error(`Work report ${String(existing.id)} (${date}) is in the period locked up to ${contract.lockedDate}; it cannot be changed or deleted.`);
+    throw new IntempusToolError(`Work report ${idText(existing.id)} (${dateText(date)}) is in the period locked up to ${dateText(contract.lockedDate)}; it cannot be changed or deleted.`);
   }
 }
 
+/**
+ * On an update `input` is merged from the stored registration, so its values can be Intempus' text: error texts
+ * quote them only through idText and dateText.
+ */
 async function buildTimeBody(client: IntempusClient, target: TimeTarget, input: TimeInput): Promise<Record<string, unknown>> {
   const contract = contractOn(target.contracts, input.date);
   if (!contract) {
-    throw new Error(`Employee ${target.employeeId} has no Intempus contract covering ${input.date}; time cannot be registered on that date.`);
+    throw new IntempusToolError(`Employee ${idText(target.employeeId)} has no Intempus contract covering ${dateText(input.date)}; time cannot be registered on that date.`);
   }
   if (contract.lockedDate && input.date <= contract.lockedDate) {
-    throw new Error(`The period up to ${contract.lockedDate} is locked on the employee's contract; ${input.date} cannot be changed.`);
+    throw new IntempusToolError(`The period up to ${dateText(contract.lockedDate)} is locked on the employee's contract; ${dateText(input.date)} cannot be changed.`);
   }
 
-  const workType = await client.get<IntempusObject>(`work_type/${input.workTypeId}/`);
+  const workType = await client.get<IntempusObject>(`work_type/${pathSegment(input.workTypeId)}/`);
   if (workType.active !== true) {
-    throw new Error(`Work type ${input.workTypeId} (${String(workType.name)}) is not active.`);
+    throw new IntempusToolError(`Work type ${idText(input.workTypeId)} is not active.`);
   }
   const workModelId = idFromUri(workType.work_model);
   if (target.strictWorkModel && contract.workModelId !== undefined && workModelId !== contract.workModelId) {
-    throw new Error(
-      `Work type ${input.workTypeId} (${String(workType.name)}) belongs to work model "${String(workType.work_model__name)}", ` +
-        `not the employee's "${contract.workModelName ?? contract.workModelId}". Use intempus_list_work_types to pick a valid one.`,
+    throw new IntempusToolError(
+      `Work type ${idText(input.workTypeId)} belongs to work model ${idText(workModelId)}, ` +
+        `not to the employee's work model ${idText(contract.workModelId)}. Use intempus_list_work_types to pick a valid one.`,
     );
   }
 
@@ -363,33 +369,33 @@ async function buildTimeBody(client: IntempusClient, target: TimeTarget, input: 
   // ("Projektarbejde skal være tilknyttet et projekt", verified 2026-09-29).
   const category = workType.work_category as { case_related?: unknown; name?: unknown } | string | null;
   if (input.caseId === undefined && category && typeof category === 'object' && category.case_related === true) {
-    throw new Error(`Work type ${input.workTypeId} (${String(workType.name)}) is project work and needs a caseId.`);
+    throw new IntempusToolError(`Work type ${idText(input.workTypeId)} is project work and needs a caseId.`);
   }
 
   if (input.caseId !== undefined) {
-    const kase = await client.get<IntempusObject>(`case/${input.caseId}/`);
+    const kase = await client.get<IntempusObject>(`case/${pathSegment(input.caseId)}/`);
     if (kase.active !== true || kase.permit_new_workreports === false) {
-      throw new Error(`Case ${input.caseId} (${String(kase.name)}) is closed for new time registrations.`);
+      throw new IntempusToolError(`Case ${idText(input.caseId)} is closed for new time registrations.`);
     }
   }
 
   const startTime = input.startTime ? normalizeTime(input.startTime) : undefined;
   const endTime = input.endTime ? normalizeTime(input.endTime) : undefined;
   if ((startTime && !endTime) || (!startTime && endTime)) {
-    throw new Error('Give both startTime and endTime, or neither (then hours is required).');
+    throw new IntempusToolError('Give both startTime and endTime, or neither (then hours is required).');
   }
   // Intempus: "Start- og sluttid skal være angivet for denne arbejdstype"
   // for work types with report_interval (verified 2026-09-29).
   if (workType.report_interval === true && !(startTime && endTime)) {
-    throw new Error(`Work type ${input.workTypeId} (${String(workType.name)}) requires startTime and endTime, not just hours.`);
+    throw new IntempusToolError(`Work type ${idText(input.workTypeId)} requires startTime and endTime, not just hours.`);
   }
   const breakHours = input.breakHours ?? 0;
   const amount = input.hours ?? (startTime && endTime ? Math.max(0, hoursBetween(startTime, endTime) - breakHours) : undefined);
   if (amount === undefined || !Number.isFinite(amount) || amount < 0) {
-    throw new Error('Give hours, or startTime and endTime.');
+    throw new IntempusToolError('Give hours, or startTime and endTime.');
   }
   if (amount > 24) {
-    throw new Error(`${amount} hours on one registration is more than a day; split it or check the input.`);
+    throw new IntempusToolError(`${Number(amount)} hours on one registration is more than a day; split it or check the input.`);
   }
 
   return {
@@ -409,7 +415,7 @@ async function buildTimeBody(client: IntempusClient, target: TimeTarget, input: 
 /** Reports that are approved (any level) or locked must not be edited by the employee. */
 export function assertEditableBySelf(report: IntempusObject): void {
   if (report.isimmutable === true) {
-    throw new Error(`Work report ${String(report.id)} is locked in Intempus and cannot be changed.`);
+    throw new IntempusToolError(`Work report ${idText(report.id)} is locked in Intempus and cannot be changed.`);
   }
   const anyApproval =
     report.approved === true ||
@@ -417,7 +423,7 @@ export function assertEditableBySelf(report: IntempusObject): void {
     Boolean(report.approved_by_final) ||
     (Array.isArray(report.approved_by) && (report.approved_by as IntempusObject[]).some(entry => entry?.date));
   if (anyApproval) {
-    throw new Error(`Work report ${String(report.id)} is already approved; ask your approver to withdraw the approval first.`);
+    throw new IntempusToolError(`Work report ${idText(report.id)} is already approved; ask your approver to withdraw the approval first.`);
   }
 }
 
@@ -445,3 +451,20 @@ export async function createOrUpdate(
 }
 
 export { contractsOf };
+
+/*
+ * Error texts quote only our own words, the caller's input and values of a
+ * fixed shape (ids, dates): a name or other text Intempus returned never goes
+ * into an error (see the threat model in the README).
+ */
+
+/** An Intempus id as error text: a positive whole number, or "?". */
+export function idText(value: unknown): string {
+  const number = typeof value === 'number' ? value : typeof value === 'string' && /^\d{1,12}$/.test(value) ? Number(value) : NaN;
+  return Number.isSafeInteger(number) && number > 0 ? String(number) : '?';
+}
+
+/** An Intempus date as error text: YYYY-MM-DD, or "an unreadable date". */
+export function dateText(value: unknown): string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : 'an unreadable date';
+}

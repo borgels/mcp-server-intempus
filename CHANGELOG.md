@@ -1,12 +1,59 @@
 # Changelog
 
-## Unreleased
-
-- Published to npm and the MCP Registry from tagged releases.
-
 ## 0.3.0
 
-HTTP transport, upstream client and supply chain.
+Embeddable gateway, HTTP transport, upstream client and supply chain.
+
+### Embeddable gateway (`./gateway`)
+
+- New package export `mcp-server-intempus/gateway` in the shape of
+  `mcp-server-template`, for hosts that run one instance per tenant in one
+  process (see the README, "Embedding" and "Threat model").
+- `createIntempusGateway({ apiUser, apiKey, baseUrl?, fetchImpl?, timeoutMs?, maxRetryAfterSeconds?, policy? })`:
+  both credentials required and never read from the environment; a gateway
+  instance reads no `INTEMPUS_*` variable. The key is sent only to
+  `https://intempus.dk`.
+- Key admission against a generated corpus of our own texts
+  (`scripts/fixed-corpus.mjs`, `src/fixed-corpus.generated.ts`), sealed
+  `GatewayConfigError`, sink check on every output with fixed fallbacks, and a
+  `SecretRedactor` per instance.
+- Host policy (`enableWrites`, `disabledTools`, `audit`) through an
+  AsyncLocalStorage call scope; without a policy, writes are off and nothing
+  is audited. Audit records name the caller only as an HMAC pseudonym.
+- Errors only as the HTTP status and our own fixed texts; Intempus' response
+  bodies (its Danish validation messages included) never reach the host. A
+  400 body is only compared with a short fixed list of known messages, for
+  which the gateway has its own text.
+- `intempusToolCatalog`, deeply frozen, with `upstream` and `broad`; names
+  without the `intempus_` prefix. It holds the company-wide tools that need
+  no identity, run as the admin role: `search_capabilities`, `list_cases`,
+  `list_work_types`, `list_employees`, `get_employee`,
+  `list_responsibilities`, `list_work_reports`, `list_customers`,
+  `list_balances`, `get_employee_balances`, `list_schedules`,
+  `list_planned_work`, `list_reference_data`, `get_resource` (broad) and the
+  write tools `manage_work_report`, `manage_case`, `manage_customer`,
+  `manage_schedule`, `manage_employee`, `manage_contract`,
+  `manage_user_access`, `manage_responsibility`.
+- Not in the gateway: `whoami`, the self-service and team tools and
+  `register_time` (they need the person's own Intempus employee, which the
+  host does not know), and the two-step `prepare_admin_change` /
+  `commit_prepared_operation` (the host has no confirmation tool). They stay
+  in the MCP server.
+
+### Changes to the MCP server
+
+- The cached employee list and company are kept per client instead of per
+  base URL, and so is the set of resources that need offset paging.
+- Error texts of the server's own checks no longer quote names from
+  Intempus data (work type, work model, case names); they name ids and dates.
+  Values taken from a stored registration on an update (times, dates) are
+  not quoted either, and a registration whose stored date is not a date is
+  refused instead of changed.
+- The audit log records an error as a fixed code (`http_<status>`,
+  `timeout`, `refused`, `error`) instead of its message.
+- Published to npm and the MCP Registry from tagged releases.
+
+### HTTP transport, upstream client and supply chain
 
 - HTTP transport fails closed: it refuses to start on a non-loopback bind, or
   with `MCP_ALLOW_ANY_ORIGIN=true`, unless `MCP_HTTP_TOKEN` is set.

@@ -1,5 +1,5 @@
 import { readEnvInteger } from '../config-env.js';
-import { IntempusHttpError } from '../errors.js';
+import { IntempusHttpError, IntempusToolError, KNOWN_PROBLEMS } from '../errors.js';
 
 export interface IntempusClientOptions {
   username?: string;
@@ -9,6 +9,12 @@ export interface IntempusClientOptions {
   timeoutMs?: number;
   /** Longest Retry-After (seconds) the client waits out once before failing. Default 10. */
   maxRetryAfterSeconds?: number;
+  /**
+   * False for a gateway instance: no INTEMPUS_* variable is read (omitted options take their defaults), and an
+   * error response is not read into the error (only its status, our own hint and a parsed Retry-After; a 400 body is
+   * only compared with a fixed list of known validation messages, see KNOWN_PROBLEMS). Default true.
+   */
+  fromEnvironment?: boolean;
 }
 
 export type QueryValue = string | number | boolean | null | undefined | ReadonlyArray<string | number>;
@@ -36,10 +42,14 @@ export interface ListAllResult<T> {
   totalCount?: number;
 }
 
-const DEFAULT_BASE_URL = 'https://intempus.dk/web/v1';
+export const DEFAULT_BASE_URL = 'https://intempus.dk/web/v1';
+export const DEFAULT_TIMEOUT_MS = 30_000;
 
-/** Resources that reject cursor pagination; learned at runtime, seeded with the verified ones. */
-const OFFSET_ONLY_RESOURCES = new Set(['explored_employee_balance', 'schedule']);
+/** Resources that reject cursor pagination (verified); each client learns more at runtime. */
+const OFFSET_ONLY_RESOURCES: readonly string[] = ['explored_employee_balance', 'schedule'];
+
+/** Bytes of a 400 body a gateway instance compares with KNOWN_PROBLEMS; the rest is discarded. */
+const MAX_PROBLEM_BODY_BYTES = 16 * 1024;
 
 /**
  * Client for the Intempus REST API (Django + tastypie).
@@ -63,16 +73,25 @@ export class IntempusClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private readonly maxRetryAfterSeconds: number;
+  /** False for a gateway instance (see IntempusClientOptions.fromEnvironment). */
+  private readonly errorDetail: boolean;
+  /** Resources this client pages by offset; per client, so nothing is shared between instances. */
+  private readonly offsetOnly = new Set(OFFSET_ONLY_RESOURCES);
 
   constructor(options: IntempusClientOptions = {}) {
-    this.username = options.username ?? process.env.INTEMPUS_API_USER;
-    this.apiKey = options.apiKey ?? process.env.INTEMPUS_API_KEY;
-    this.baseUrl = trimTrailingSlash(options.baseUrl ?? process.env.INTEMPUS_BASE_URL ?? DEFAULT_BASE_URL);
+    const env = options.fromEnvironment === false ? {} : process.env;
+    this.errorDetail = options.fromEnvironment !== false;
+    this.username = options.username ?? env.INTEMPUS_API_USER;
+    this.apiKey = options.apiKey ?? env.INTEMPUS_API_KEY;
+    this.baseUrl = trimTrailingSlash(options.baseUrl ?? env.INTEMPUS_BASE_URL ?? DEFAULT_BASE_URL);
     assertSafeBaseUrl(this.baseUrl);
     this.uriPrefix = `${new URL(this.baseUrl).pathname.replace(/\/+$/, '')}/`;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs =
-      options.timeoutMs ?? readEnvInteger('INTEMPUS_TIMEOUT_MS', 30_000, { min: 1, max: 600_000 });
+      options.timeoutMs ??
+      (options.fromEnvironment === false
+        ? DEFAULT_TIMEOUT_MS
+        : readEnvInteger('INTEMPUS_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, { min: 1, max: 600_000 }));
     this.maxRetryAfterSeconds = options.maxRetryAfterSeconds ?? 10;
   }
 
@@ -109,7 +128,7 @@ export class IntempusClient {
     const items: T[] = [];
     const pageSize = Math.min(1000, Math.max(1, maxItems));
     const key = resource.replace(/^\/+|\/+$/g, '');
-    const cursor = !OFFSET_ONLY_RESOURCES.has(key);
+    const cursor = !this.offsetOnly.has(key);
     let next: string | undefined = this.buildUrl(resource, { limit: pageSize, ...(cursor ? { pagination_type: 'cursor' } : {}), ...query });
     let totalCount: number | undefined;
     while (next && items.length < maxItems) {
@@ -121,7 +140,7 @@ export class IntempusClient {
         // 2026-09-29) answer HTTP 500 to pagination_type=cursor. Fall back
         // to offset paging for them and remember it for this process.
         if (cursor && items.length === 0 && error instanceof IntempusHttpError && error.status === 500) {
-          OFFSET_ONLY_RESOURCES.add(key);
+          this.offsetOnly.add(key);
           return this.listAll<T>(resource, query, maxItems);
         }
         throw error;
@@ -159,7 +178,8 @@ export class IntempusClient {
       const target = new URL(path);
       const base = new URL(this.baseUrl);
       if (target.origin !== base.origin) {
-        throw new Error(`Refusing to follow a link outside ${base.origin}: ${target.origin}`);
+        // Neither address is quoted: the link is Intempus' text, the base URL configuration.
+        throw new IntempusToolError('Refusing to follow a link outside the configured Intempus address.');
       }
       return target.toString();
     }
@@ -205,7 +225,9 @@ export class IntempusClient {
       throw new IntempusHttpError({
         status: response.status,
         url,
+        retryAfter,
         fallbackMessage: 'redirect not followed (check INTEMPUS_BASE_URL)',
+        detail: this.errorDetail,
       });
     }
 
@@ -215,6 +237,14 @@ export class IntempusClient {
         await new Promise(resolve => setTimeout(resolve, Math.max(0, seconds) * 1000));
         return this.request<T>(method, url, undefined, body, true);
       }
+    }
+
+    if (!response.ok && !this.errorDetail) {
+      // A gateway instance never reads an error body into the error: Intempus' text can quote the request or the
+      // key. A 400 body is only compared with a fixed list of known validation messages.
+      const knownProblem = response.status === 400 ? await knownProblemOf(response) : undefined;
+      await response.body?.cancel().catch(() => undefined);
+      throw new IntempusHttpError({ status: response.status, url, retryAfter, detail: false, knownProblem });
     }
 
     const responseBody = await readBody(response);
@@ -272,6 +302,18 @@ async function readBody(response: Response): Promise<unknown> {
   } catch {
     return text;
   }
+}
+
+/** The index of the first KNOWN_PROBLEMS phrase in the body (read up to MAX_PROBLEM_BODY_BYTES), if any. */
+async function knownProblemOf(response: Response): Promise<number | undefined> {
+  let text: string;
+  try {
+    text = (await readTextUpTo(response, MAX_PROBLEM_BODY_BYTES)).text;
+  } catch {
+    return undefined;
+  }
+  const index = KNOWN_PROBLEMS.findIndex(([phrase]) => text.includes(phrase));
+  return index >= 0 ? index : undefined;
 }
 
 /** Reads at most `limit` bytes of the body as text and cancels the rest. */
@@ -346,7 +388,7 @@ export function pathSegment(value: string | number): string {
     // eslint-disable-next-line no-control-regex
     /[\u0000-\u001f\u007f]/.test(text)
   ) {
-    throw new Error(`Invalid path parameter: ${JSON.stringify(text.slice(0, 60))}`);
+    throw new IntempusToolError(`Invalid path parameter: ${JSON.stringify(text.slice(0, 60))}`);
   }
   return encodeURIComponent(text);
 }

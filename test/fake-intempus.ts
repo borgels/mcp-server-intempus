@@ -43,6 +43,11 @@ export class FakeIntempus {
     });
   }
 
+  /** The fake as a fetch implementation, for a gateway instance (which builds its own client). */
+  get fetchImpl(): typeof fetch {
+    return this.fetch as unknown as typeof fetch;
+  }
+
   writes(): Recorded[] {
     return this.calls.filter(call => call.method !== 'GET');
   }
