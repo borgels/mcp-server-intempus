@@ -598,7 +598,7 @@ describe('Intempus gateway personal data', () => {
     fake.db.schedule = [
       { id: 930, employees: [uri('employee', 2)], work_type: uri('work_type', 53), work_type__name: 'Sygdom', start_date: '2026-09-01', end_date: null, remarks: 'Operation i knæet' },
       { id: 931, employees: [uri('employee', 2)], work_type: uri('work_type', 50), work_type__name: 'Projekttimer', start_date: '2026-09-01', end_date: null, remarks: 'Montage' },
-      { id: 932, employees: [uri('employee', 2)], work_type: { id: 53, resource_uri: uri('work_type', 53), name: 'Sygdom', work_category: { id: 5, name: 'Helbredsfravær' } }, start_date: '2026-09-01', end_date: null, remarks: 'Genoptræning', note: 'Fysioterapi' },
+      { id: 932, employees: [uri('employee', 2)], work_type: { id: 53, resource_uri: uri('work_type', 53), name: 'Sygdom', work_category: { id: 5, name: 'Helbredsfravær' } }, start_date: '2026-09-01', end_date: null, remarks: 'Genoptræning', note: 'Fysioterapi', extra: [{ category_name: 'Helbredsfravær', keep: 'ok' }, { resource_uri: uri('work_type', 53), id: 53, name: 'Sygdom' }, { nested: { link: uri('work_category', 5), id: 5, name: 'Helbredsfravær' }, keep: 'ok' }, { id: 53, name: 'Sygdom', links: [uri('work_type', 53)] }, { id: 53, name: 'Sygdom', sub: { deeper: [{ category_id: 5 }] } }, { keep: 'ok' }], solo: { id: 53, name: 'Sygdom', links: [uri('work_type', 53)] }, harmless: [{ keep: 'ok' }], flat: [53, 'Sygdom', uri('work_type', 53)], deepList: [[53, 'Sygdom', [uri('work_category', 5)]]] },
     ];
     fake.db.work_report.push({ id: 913, employee: uri('employee', 2), employee_id: '2', start_date: '2026-09-24', amount: '7.5', worktype: uri('work_type', 55), worktype_name: 'Barn syg', remarks: 'Mæslinger', approved_by: [] });
     fake.db.planned_work_report = [
@@ -654,13 +654,54 @@ describe('Intempus gateway personal data', () => {
     const rows = data(listed).schedules as Array<Record<string, any>>;
     const sick = rows.find(row => row.id === 930)!;
     expect(sick).not.toHaveProperty('remarks');
-    expect(sick.work_type__name).toBe('Absence');
+    expect(sick.workType).toEqual({ name: 'Absence' });
+    expect(sick).not.toHaveProperty('work_type');
+    expect(sick).not.toHaveProperty('work_type__name');
     expect(rows.find(row => row.id === 931)!.remarks).toBe('Montage');
     const saved = await gw.callTool('manage_schedule', { action: 'update', scheduleId: 930, remarks: 'Genoptræning' });
     expect(saved.isError).toBeUndefined();
     const embedded = rows.find(row => row.id === 932)!;
-    expect(embedded.work_type).toEqual({ id: 53, resource_uri: uri('work_type', 53), name: 'Absence' });
+    expect(embedded).not.toHaveProperty('work_type');
+    expect(embedded.workType).toEqual({ name: 'Absence' });
     expect(JSON.stringify([listed, saved])).not.toMatch(/Sygdom|Operation|Genoptræning|Helbredsfravær|Fysioterapi/);
+  });
+
+  it('leaves no id or URI in a masked entry that list_work_types can link back to the sensitive work type', async () => {
+    const fake = absenceWorld();
+    fake.db.planned_work_report!.push({ id: 923, employee: uri('employee', 2), worktype: uri('work_type', 53), start_date: '2099-01-05', remarks: 'x' });
+    const gw = gateway(fake, { policy: { enableWrites: true } });
+    const types = data(await gw.callTool('list_work_types', {})).workTypes as Array<{ id: number; name: string }>;
+    const sick = types.find(type => type.name === 'Sygdom')!;
+    expect(sick.id).toBe(53);
+    const reports = await gw.callTool('list_work_reports', { from: '2026-09-20', to: '2026-09-30' });
+    const saved = await gw.callTool('manage_work_report', { action: 'update', workReportId: 910, remarks: 'Stadig syg' });
+    const planned = await gw.callTool('list_planned_work', { from: '2099-01-01', to: '2099-01-10' });
+    const schedules = await gw.callTool('list_schedules', {});
+    const masked = [
+      (data(reports).workReports as Array<Record<string, any>>).find(row => row.id === 910)!,
+      data(saved),
+      (data(planned).planned as Array<Record<string, any>>).find(row => row.id === 923)!,
+      (data(schedules).schedules as Array<Record<string, any>>).find(row => row.id === 930)!,
+      (data(schedules).schedules as Array<Record<string, any>>).find(row => row.id === 932)!,
+    ];
+    // Objects and lists that point at a work type or category anywhere inside them go whole, with every id and name.
+    expect(masked[4]).not.toHaveProperty('extra');
+    expect(masked[4]!.harmless).toEqual([{ keep: 'ok' }]);
+    expect(masked[4]).not.toHaveProperty('solo');
+    expect(masked[4]).not.toHaveProperty('flat');
+    expect(masked[4]).not.toHaveProperty('deepList');
+    for (const row of masked) {
+      expect(row.workType).toMatchObject({ name: 'Absence' });
+      expect(Object.keys(row.workType).filter(key => key !== 'unit')).toEqual(['name']);
+      const { workType: _workType, ...rest } = row;
+      const json = JSON.stringify(rest);
+      expect(json).not.toMatch(/work_?type|work_?category|workTypeId|category/i);
+      expect(json).not.toContain(uri('work_type', 53));
+      expect(json).not.toMatch(/Helbredsfravær|Sygdom|_pk|Pk/);
+      // No id field anywhere in the row holds the sensitive work type's id.
+      const ids = JSON.stringify(row, (key, value) => (/(^|_)id$|Id$/.test(key) && value === sick.id ? 'LINK' : value));
+      expect(ids).not.toContain('LINK');
+    }
   });
 
   it('masks the reason in the answer of manage_work_report and in planned work', async () => {

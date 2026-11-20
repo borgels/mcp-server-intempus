@@ -938,7 +938,6 @@ export const FIXED_CORPUS: readonly string[] = [
   "work_type_balance",
   "work_type_case_rules",
   "work_type_rate",
-  "workcategory",
   "working_hours_agreement",
   "working_hours_agreement/",
   "worktype",

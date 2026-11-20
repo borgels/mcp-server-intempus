@@ -220,7 +220,10 @@ every gateway result (after the handler, before redaction;
   fields (remarks, notes, comments, descriptions) and no work type or
   category name; an entry without a readable work type counts as absence; a work type not marked as no absence
   (`vacation_or_leave: false`), or one the company does not have, counts as
-  an absence type (fail closed);
+  an absence type (fail closed). A masked entry keeps no reference to its
+  work type or category (no id, URI or embedded object, at any depth), so it
+  cannot be linked back through `list_work_types`; only
+  `workType: { name: "Absence" }` remains;
 - in `get_employee_balances`, the name of a balance that is not neutral
   (`Absence` instead; the numbers stay). `list_balances` and
   `list_work_types` show the company's own set-up unchanged.
