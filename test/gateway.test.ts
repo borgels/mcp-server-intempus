@@ -598,7 +598,7 @@ describe('Intempus gateway personal data', () => {
     fake.db.schedule = [
       { id: 930, employees: [uri('employee', 2)], work_type: uri('work_type', 53), work_type__name: 'Sygdom', start_date: '2026-09-01', end_date: null, remarks: 'Operation i knæet' },
       { id: 931, employees: [uri('employee', 2)], work_type: uri('work_type', 50), work_type__name: 'Projekttimer', start_date: '2026-09-01', end_date: null, remarks: 'Montage' },
-      { id: 932, employees: [uri('employee', 2)], work_type: { id: 53, resource_uri: uri('work_type', 53), name: 'Sygdom', work_category: { id: 5, name: 'Helbredsfravær' } }, start_date: '2026-09-01', end_date: null, remarks: 'Genoptræning', note: 'Fysioterapi', extra: [{ category_name: 'Helbredsfravær', category_pk: 5, link: uri('work_type', 53), WorkTypePk: 53, keep: 'ok' }] },
+      { id: 932, employees: [uri('employee', 2)], work_type: { id: 53, resource_uri: uri('work_type', 53), name: 'Sygdom', work_category: { id: 5, name: 'Helbredsfravær' } }, start_date: '2026-09-01', end_date: null, remarks: 'Genoptræning', note: 'Fysioterapi', extra: [{ category_name: 'Helbredsfravær', keep: 'ok' }, { resource_uri: uri('work_type', 53), id: 53, name: 'Sygdom' }, { nested: { link: uri('work_category', 5), id: 5, name: 'Helbredsfravær' }, keep: 'ok' }] },
     ];
     fake.db.work_report.push({ id: 913, employee: uri('employee', 2), employee_id: '2', start_date: '2026-09-24', amount: '7.5', worktype: uri('work_type', 55), worktype_name: 'Barn syg', remarks: 'Mæslinger', approved_by: [] });
     fake.db.planned_work_report = [
@@ -684,6 +684,7 @@ describe('Intempus gateway personal data', () => {
       (data(schedules).schedules as Array<Record<string, any>>).find(row => row.id === 930)!,
       (data(schedules).schedules as Array<Record<string, any>>).find(row => row.id === 932)!,
     ];
+    // Objects that point at a work type or category go whole; the last keeps what is not a reference.
     expect(masked[4]!.extra).toEqual([{ keep: 'ok' }]);
     for (const row of masked) {
       expect(row.workType).toMatchObject({ name: 'Absence' });

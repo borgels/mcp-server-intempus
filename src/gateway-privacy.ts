@@ -149,6 +149,13 @@ function isWorkTypeField(field: string): boolean {
   return field.includes('worktype') || field.includes('category');
 }
 
+/** Whether an object's own fields name a work type or category, or hold one's URI. */
+function pointsAtWorkType(value: Row): boolean {
+  return Object.entries(value).some(
+    ([key, entry]) => isWorkTypeField(fieldOf(key)) || (typeof entry === 'string' && WORK_TYPE_REF.test(entry)),
+  );
+}
+
 /**
  * A value of a masked row with, at any depth, every free-text field and every reference to a work type or category
  * removed: fields about them (ids, URIs, names, embedded objects) and texts that hold such a URI.
@@ -160,6 +167,9 @@ function withoutWorkTypeRefs(value: unknown, depth = 0): unknown {
     return value.map(entry => withoutWorkTypeRefs(entry, depth + 1)).filter(entry => entry !== undefined);
   }
   if (!isRow(value)) return value;
+  // A nested object that points at a work type or category (a URI among its values, or a field about one) is a
+  // reference itself: it goes whole, with its id and name.
+  if (depth > 0 && pointsAtWorkType(value)) return undefined;
   const out: Row = {};
   for (const [key, entry] of Object.entries(value)) {
     const field = fieldOf(key);

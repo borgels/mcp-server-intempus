@@ -6,7 +6,7 @@
   schedule) keeps no reference to its work type or category at any depth:
   no id, `workTypeId`, `work_type`, `worktype`, `work_category`, URI, name or
   embedded object, nor any field about a category (`category_name`,
-  `category_pk` …), so it cannot be linked back to the work type through
+  `category_pk` …) and no nested object that points at one, so it cannot be linked back to the work type through
   `list_work_types`. Only `workType: { name: "Absence" }` (with the unit for
   a time registration) remains. Catalog unchanged; the MCP server is
   unchanged.
