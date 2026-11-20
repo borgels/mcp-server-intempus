@@ -16,8 +16,10 @@ Personal data in the embeddable gateway. The MCP server is unchanged.
     afspadsering, timebank, fridag, helligdag, holiday, vacation, time off in
     lieu) has the work type name `Absence` and no category or remarks;
     planned work and schedules of such a type (`list_planned_work`,
-    `list_schedules`, `manage_schedule`) have no remarks and no work type
-    name. The work types are read once per call (`GET /work_type/`, now in
+    `list_schedules`, `manage_schedule`) have no free-text fields (remarks,
+    notes, comments, descriptions, reasons) and no work type or category
+    name (an embedded work type is reduced to its id). An entry without a
+    readable work type counts as absence. The work types are read once per call (`GET /work_type/`, now in
     `upstream`); a work type not marked as no absence
     (`vacation_or_leave: false`), or one the company does not have, counts as
     an absence type (fail closed);

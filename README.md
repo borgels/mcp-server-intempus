@@ -216,8 +216,9 @@ every gateway result (after the handler, before redaction;
   name is not exactly one of the neutral names (ferie, feriefri, feriefridag,
   afspadsering, timebank, fridag, helligdag, holiday, vacation, time off in
   lieu, case-insensitive) has the work type name `Absence` and no category or
-  remarks, and planned work and schedules of such a type have no remarks
-  and no work type name; a work type not marked as no absence
+  remarks, and planned work and schedules of such a type have no free-text
+  fields (remarks, notes, comments, descriptions) and no work type or
+  category name; an entry without a readable work type counts as absence; a work type not marked as no absence
   (`vacation_or_leave: false`), or one the company does not have, counts as
   an absence type (fail closed);
 - in `get_employee_balances`, the name of a balance that is not neutral

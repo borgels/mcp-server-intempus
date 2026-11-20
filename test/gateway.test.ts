@@ -598,11 +598,13 @@ describe('Intempus gateway personal data', () => {
     fake.db.schedule = [
       { id: 930, employees: [uri('employee', 2)], work_type: uri('work_type', 53), work_type__name: 'Sygdom', start_date: '2026-09-01', end_date: null, remarks: 'Operation i knæet' },
       { id: 931, employees: [uri('employee', 2)], work_type: uri('work_type', 50), work_type__name: 'Projekttimer', start_date: '2026-09-01', end_date: null, remarks: 'Montage' },
+      { id: 932, employees: [uri('employee', 2)], work_type: { id: 53, resource_uri: uri('work_type', 53), name: 'Sygdom', work_category: { id: 5, name: 'Helbredsfravær' } }, start_date: '2026-09-01', end_date: null, remarks: 'Genoptræning', note: 'Fysioterapi' },
     ];
     fake.db.work_report.push({ id: 913, employee: uri('employee', 2), employee_id: '2', start_date: '2026-09-24', amount: '7.5', worktype: uri('work_type', 55), worktype_name: 'Barn syg', remarks: 'Mæslinger', approved_by: [] });
     fake.db.planned_work_report = [
       { id: 920, employee: uri('employee', 2), worktype: uri('work_type', 53), start_date: '2099-01-02', remarks: 'Operation i knæet' },
       { id: 921, employee: uri('employee', 2), worktype: uri('work_type', 50), start_date: '2099-01-03', remarks: 'Montage' },
+      { id: 922, employee: uri('employee', 2), worktype: null, start_date: '2099-01-04', remarks: 'Kemoterapi' },
     ];
     fake.db.balance = [
       { id: 20, name: 'Ferie', unit: 'days', visible: true },
@@ -656,7 +658,9 @@ describe('Intempus gateway personal data', () => {
     expect(rows.find(row => row.id === 931)!.remarks).toBe('Montage');
     const saved = await gw.callTool('manage_schedule', { action: 'update', scheduleId: 930, remarks: 'Genoptræning' });
     expect(saved.isError).toBeUndefined();
-    expect(JSON.stringify([listed, saved])).not.toMatch(/Sygdom|Operation|Genoptræning/);
+    const embedded = rows.find(row => row.id === 932)!;
+    expect(embedded.work_type).toEqual({ id: 53, resource_uri: uri('work_type', 53), name: 'Absence' });
+    expect(JSON.stringify([listed, saved])).not.toMatch(/Sygdom|Operation|Genoptræning|Helbredsfravær|Fysioterapi/);
   });
 
   it('masks the reason in the answer of manage_work_report and in planned work', async () => {
@@ -667,9 +671,13 @@ describe('Intempus gateway personal data', () => {
     expect(data(saved).workType.name).toBe('Absence');
     expect(JSON.stringify(saved)).not.toMatch(/Sygdom|Stadig syg|Lægeerklæring/);
     const planned = await gw.callTool('list_planned_work', { from: '2099-01-01', to: '2099-01-10' });
+    const result = planned;
     const rows = data(planned).planned as Array<Record<string, any>>;
     expect(rows.find(row => row.id === 920)).not.toHaveProperty('remarks');
     expect(rows.find(row => row.id === 921)!.remarks).toBe('Montage');
+    // No work type: treated as absence (fail closed), through serialisation.
+    expect(rows.find(row => row.id === 922)).not.toHaveProperty('remarks');
+    expect(result.content[0]!.text).not.toContain('Kemoterapi');
   });
 
   it('names a sensitive balance Absence and keeps the numbers; the definitions stay', async () => {

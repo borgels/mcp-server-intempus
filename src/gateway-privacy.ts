@@ -132,40 +132,62 @@ function sensitive(types: ReadonlyMap<number, boolean>, id: unknown): boolean {
   return typeof id !== 'number' || types.get(id) !== false;
 }
 
-/** A time registration view (src/intempus/format.ts, workReportView) without a sensitive absence reason. */
-function maskWorkReport(row: Row, types: ReadonlyMap<number, boolean>): Row {
-  const workType = isRow(row.workType) ? row.workType : undefined;
-  if (!workType || !sensitive(types, workType.id)) return row;
-  const { category: _category, remarks: _remarks, additionalRemarks: _additional, ...rest } = row;
-  return { ...rest, workType: { ...workType, name: ABSENCE_NAME } };
-}
+/** Field names that hold free text about an entry (remarks, notes, comments, descriptions, reasons). */
+const FREE_TEXT_FIELD = /remark|note|comment|description|reason/;
 
-/** A planned work view (plannedView) without the remarks of a sensitive absence. */
-function maskPlanned(row: Row, types: ReadonlyMap<number, boolean>): Row {
-  if (!('workTypeId' in row) || !sensitive(types, row.workTypeId)) return row;
-  const { remarks: _remarks, ...rest } = row;
-  return rest;
+const fieldOf = (key: string): string => key.toLowerCase().replace(/[-_\s.]/g, '');
+
+/** An embedded work type or category, reduced to its id and resource URI, named "Absence". */
+function absenceRef(value: unknown): unknown {
+  if (!isRow(value)) return value;
+  return {
+    ...(typeof value.id === 'number' ? { id: value.id } : {}),
+    ...(typeof value.resource_uri === 'string' ? { resource_uri: value.resource_uri } : {}),
+    name: ABSENCE_NAME,
+  };
 }
 
 /**
- * A raw schedule row without the remarks and names of a sensitive absence: `remarks` is removed, and any field that
- * names the work type or category (`work_type_name`, `work_type__name`, `work_category_name` …, or the `name` of an
- * embedded work type or category) becomes "Absence".
- * A schedule without a readable work type counts as sensitive (fail closed).
+ * A row of a sensitive absence: every free-text field (remarks, notes, comments, descriptions, reasons) and every
+ * category name removed, and every field about the work type or category named "Absence" (an embedded work type or
+ * category is reduced to its id and URI).
+ */
+function maskedRow(row: Row): Row {
+  const out: Row = {};
+  for (const [key, value] of Object.entries(row)) {
+    const field = fieldOf(key);
+    if (FREE_TEXT_FIELD.test(field) || field === 'category') continue;
+    if (/^work(type|category)/.test(field) || field === 'worktype' || field === 'workcategory') {
+      out[key] = field.endsWith('name') ? ABSENCE_NAME : isRow(value) ? absenceRef(value) : value;
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * A time registration view (src/intempus/format.ts, workReportView) without a sensitive absence reason. Fail closed:
+ * a view without a readable work type id is treated as sensitive.
+ */
+function maskWorkReport(row: Row, types: ReadonlyMap<number, boolean>): Row {
+  const workType = isRow(row.workType) ? row.workType : undefined;
+  if (!sensitive(types, workType?.id)) return row;
+  const masked = maskedRow(row);
+  return workType ? { ...masked, workType: { ...absenceRef(workType) as Row, ...(workType.unit !== undefined ? { unit: workType.unit } : {}) } } : masked;
+}
+
+/** A planned work view (plannedView) without the remarks of a sensitive absence; no work type id counts as sensitive. */
+function maskPlanned(row: Row, types: ReadonlyMap<number, boolean>): Row {
+  return sensitive(types, row.workTypeId) ? maskedRow(row) : row;
+}
+
+/**
+ * A raw schedule row without the remarks and names of a sensitive absence (maskedRow). A schedule without a
+ * readable work type counts as sensitive (fail closed).
  */
 function maskSchedule(row: Row, types: ReadonlyMap<number, boolean>): Row {
-  if (!sensitive(types, idFromUri(row.work_type))) return row;
-  return Object.fromEntries(
-    Object.entries(row)
-      .filter(([key]) => key !== 'remarks')
-      .map(([key, value]) => {
-        const field = key.toLowerCase().replace(/[-_\s.]/g, '');
-        if (!/^work(type|category)/.test(field)) return [key, value];
-        // A name field, or an embedded work type or category with its own name.
-        if (field.endsWith('name')) return [key, ABSENCE_NAME];
-        return [key, isRow(value) && 'name' in value ? { ...value, name: ABSENCE_NAME } : value];
-      }),
-  );
+  return sensitive(types, idFromUri(row.work_type)) ? maskedRow(row) : row;
 }
 
 /** The result of a tool in ABSENCE_VIEW_TOOLS without sensitive absence reasons. */
