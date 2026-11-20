@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.1
+
+Personal data in the embeddable gateway. The MCP server is unchanged.
+
+- A fixed layer on every gateway result, after the handler and before
+  redaction (`src/gateway-privacy.ts`):
+  - no private contact data or identity numbers: fields named like
+    `personal_email` / `personalEmail`, next of kin, relatives, emergency
+    contacts, CPR or social security numbers and birth dates are removed, in
+    views and raw rows;
+  - absence reasons: a time registration (`list_work_reports`,
+    `manage_work_report`) with an absence work type (`vacation_or_leave`)
+    whose name is not on a fixed allowlist (ferie, feriefri, feriefridag,
+    afspadsering, timebank, fridag, helligdag, holiday, vacation, time off in
+    lieu) has the work type name `Absence` and no category or remarks;
+    planned work of such a type (`list_planned_work`) has no remarks. The
+    work types are read once per call (`GET /work_type/`, now in `upstream`);
+  - `get_employee_balances`: a balance whose name is not on the same
+    allowlist is named `Absence`; the numbers stay. `list_balances` is
+    unchanged.
+- `get_resource` refuses, with a fixed text and without a request,
+  `work_report`, `historical_work_report`, `explored_employee_balance`,
+  `holiday_year_balance`, `holiday_year_balance_work_type`,
+  `work_type_balance`, `planned_work_report`, `incident` and
+  `missing_report_anomaly`.
+- Tool names, risk levels, `broad` and input schemas are unchanged.
+
 ## 0.3.0
 
 Embeddable gateway, HTTP transport, upstream client and supply chain.

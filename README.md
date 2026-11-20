@@ -178,15 +178,15 @@ offers only company-wide tools that need no identity, run as the admin role:
 | `list_employees` | read | on | no | `GET /employee/` |
 | `get_employee` | read | on | no | `GET /employee/{id}/`, `GET /userprofile/` |
 | `list_responsibilities` | read | on | no | `GET /responsible/`, `GET /responsible_for_{employee,department,case}/`, `GET /employee/` |
-| `list_work_reports` | read | on | no | `GET /work_report/` |
+| `list_work_reports` | read | on | no | `GET /work_report/`, `GET /work_type/` |
 | `list_customers` | read | on | no | `GET /customer/` |
 | `list_balances` | read | on | no | `GET /balance/` |
 | `get_employee_balances` | read | on | no | `GET /employee/`, `GET /balance/`, `GET /explored_employee_balance/` |
 | `list_schedules` | read | on | no | `GET /schedule/` |
-| `list_planned_work` | read | on | no | `GET /planned_work_report/` |
+| `list_planned_work` | read | on | no | `GET /planned_work_report/`, `GET /work_type/` |
 | `list_reference_data` | read | on | no | `GET /<kind>/` for the twelve reference lists |
 | `get_resource` | read | on | **yes** | `GET /{resource}/`, `GET /{resource}/{id}/` |
-| `manage_work_report` | write | off | no | reads of employee, work type, case and work report; `POST /work_report/`, `PATCH /work_report/{id}/` |
+| `manage_work_report` | write | off | no | reads of employee, work types, case and work report; `POST /work_report/`, `PATCH /work_report/{id}/` |
 | `manage_case` | write | off | no | `GET /case/`, `POST /case/`, `PATCH /case/{id}/`, `GET /case/{id}/` |
 | `manage_customer` | write | off | no | `GET /company/`, `POST /customer/`, `PATCH /customer/{id}/`, `GET /customer/{id}/` |
 | `manage_schedule` | write | off | no | `GET /company/`, `POST /schedule/`, `PATCH /schedule/{id}/`, `GET /schedule/{id}/` |
@@ -202,6 +202,32 @@ tools (`list_team*`, `get_team_*`) and `register_time` (they act as the
 signed-in person's own Intempus employee), and `prepare_admin_change` / `commit_prepared_operation`
 (irreversible deletes and period locks, which need a two-step confirmation
 the host has no tool for). They stay in the MCP server.
+
+**Personal data.** Whatever role the host gives a caller, a fixed layer on
+every gateway result (after the handler, before redaction;
+`src/gateway-privacy.ts`) leaves out:
+
+- private contact data and identity numbers: fields named like
+  `personal_email` / `personalEmail`, next of kin, relatives, emergency
+  contacts, CPR or social security numbers and birth dates, in views and raw
+  rows;
+- absence reasons: a time registration (`list_work_reports`,
+  `manage_work_report`) with an absence work type (`vacation_or_leave`) whose
+  name is not exactly one of the neutral names (ferie, feriefri, feriefridag,
+  afspadsering, timebank, fridag, helligdag, holiday, vacation, time off in
+  lieu, case-insensitive) has the work type name `Absence` and no category or
+  remarks, and planned work of such a type has no remarks; a work type the
+  company does not have counts as such a type;
+- in `get_employee_balances`, the name of a balance that is not neutral
+  (`Absence` instead; the numbers stay). `list_balances` and
+  `list_work_types` show the company's own set-up unchanged.
+
+`get_resource` refuses, with a fixed text and without a request, the
+resources that hold people's absence or its reasons in raw form:
+`work_report`, `historical_work_report`, `explored_employee_balance`,
+`holiday_year_balance`, `holiday_year_balance_work_type`,
+`work_type_balance`, `planned_work_report`, `incident` and
+`missing_report_anomaly`.
 
 **Instance policy.** With `policy: { enableWrites, disabledTools, audit }`
 the host decides the instance's policy: the write tools run only with

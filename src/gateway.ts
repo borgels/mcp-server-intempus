@@ -16,6 +16,15 @@ import {
 import { DEFAULT_BASE_URL, DEFAULT_TIMEOUT_MS, IntempusClient } from './intempus/client.js';
 import { REDACTION_MARKER, SecretRedactor } from './secret-redactor.js';
 import { registerIntempusTools } from './tools/intempus.js';
+import {
+  ABSENCE_VIEW_TOOLS,
+  maskAbsenceViews,
+  maskBalanceNames,
+  RAW_ABSENCE_REFUSED,
+  RAW_ABSENCE_RESOURCES,
+  sensitiveWorkTypes,
+  withoutPrivateFields,
+} from './gateway-privacy.js';
 
 /**
  * Embeddable entry point (package export `./gateway`): an embedding host,
@@ -232,10 +241,10 @@ const GATEWAY_TOOLS: ReadonlyArray<{
     name: 'list_work_reports',
     title: 'List time registrations',
     description:
-      'Time registrations of any employee in a period (default the last 31 days), optionally by employees, case and approval, with the total.',
+      'Time registrations of any employee in a period (default the last 31 days), optionally by employees, case and approval, with the total. Absence other than holiday or time off is shown as Absence, without its reason.',
     riskLevel: 'read',
     summary: 'Intempus time registrations.',
-    upstream: [get('/work_report/')],
+    upstream: [get('/work_report/'), get('/work_type/')],
   },
   {
     name: 'list_customers',
@@ -257,7 +266,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
     name: 'get_employee_balances',
     title: 'Employee balances',
     description:
-      'Balances of the given employees (default: every employee with an active contract) up to a date (default today), as Intempus computes them.',
+      'Balances of the given employees (default: every employee with an active contract) up to a date (default today), as Intempus computes them. Balances other than holiday and time off are named Absence.',
     riskLevel: 'read',
     summary: 'Intempus employee balances.',
     upstream: [get('/employee/'), get('/balance/'), get('/explored_employee_balance/')],
@@ -273,10 +282,10 @@ const GATEWAY_TOOLS: ReadonlyArray<{
   {
     name: 'list_planned_work',
     title: 'List planned work',
-    description: 'Planned work of any employee in a period (default the next 14 days).',
+    description: 'Planned work of any employee in a period (default the next 14 days). Planned absence other than holiday or time off has no remarks.',
     riskLevel: 'read',
     summary: 'Intempus planned work.',
-    upstream: [get('/planned_work_report/')],
+    upstream: [get('/planned_work_report/'), get('/work_type/')],
   },
   {
     name: 'list_reference_data',
@@ -291,7 +300,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
     name: 'get_resource',
     title: 'Read an Intempus resource',
     description:
-      'Read-only access to an allowlisted Intempus resource without its own tool (for example historical_work_report, employee_work_type_rule or daily_rest_violation): one object by id, or a list with filters. Passwords and PINs are never returned.',
+      'Read-only access to an allowlisted Intempus resource without its own tool (for example employee_work_type_rule or daily_rest_violation): one object by id, or a list with filters. Resources that hold people’s absence in raw form (time registrations, balances, planned work, incidents) are not available here. Passwords, PINs, private contact data and identity numbers are never returned.',
     riskLevel: 'read',
     summary: 'Intempus resource.',
     upstream: [get('/{resource}/'), get('/{resource}/{id}/')],
@@ -307,6 +316,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
     upstream: [
       get('/employee/{id}/'),
       get('/work_type/{id}/'),
+      get('/work_type/'),
       get('/case/{id}/'),
       get('/work_report/{id}/'),
       post('/work_report/'),
@@ -658,6 +668,21 @@ function buildIntempusGateway(options: IntempusGatewayOptions, apiKey: string, r
     },
   };
 
+  /**
+   * The fixed personal-data layer (src/gateway-privacy.ts), after the handler and before redaction: no private
+   * contact data or identity numbers, and no sensitive absence reasons or balance names.
+   */
+  async function protectPersonalData(name: string, data: unknown): Promise<unknown> {
+    let out = withoutPrivateFields(data);
+    if (ABSENCE_VIEW_TOOLS.has(name)) {
+      out = maskAbsenceViews(name, out, await sensitiveWorkTypes(client));
+    }
+    if (name === 'intempus_get_employee_balances') {
+      out = maskBalanceNames(out);
+    }
+    return out;
+  }
+
   async function runCall(toolName: string, input: GatewayJsonObject): Promise<GatewayToolResult> {
     try {
       const name = typeof toolName === 'string' ? canonicalToolName(toolName) : '';
@@ -675,8 +700,17 @@ function buildIntempusGateway(options: IntempusGatewayOptions, apiKey: string, r
         return errorResult(redactSecrets(`Invalid input for ${short}: ${z.prettifyError(parsed.error)}`));
       }
 
+      // Raw rows that hold people's absence or its reasons are not read through the broad tool (src/gateway-privacy.ts).
+      const resource = (parsed.data as { resource?: unknown }).resource;
+      if (name === 'intempus_get_resource' && typeof resource === 'string' && RAW_ABSENCE_RESOURCES.has(resource)) {
+        await writeAuditEvent({ tool: name, action: 'rejected', reason: 'raw absence resource' });
+        return errorResult(RAW_ABSENCE_REFUSED);
+      }
+
       const result = await tool.handler(parsed.data as Record<string, unknown>);
-      return normalizeResult(result, redactor, SUMMARIES.get(name) ?? 'Intempus gateway result.');
+      return await normalizeResult(result, redactor, SUMMARIES.get(name) ?? 'Intempus gateway result.', data =>
+        protectPersonalData(name, data),
+      );
     } catch (error) {
       // Our own words only (src/errors.ts, gatewayErrorText): never the text of an Intempus answer.
       return errorResult(redactSecrets(gatewayErrorText(error)));
@@ -768,7 +802,12 @@ export type IntempusGateway = ReturnType<typeof createIntempusGateway>;
  * their string form), and only then serialised again after the summary, so a
  * key cannot survive in an escaped form.
  */
-function normalizeResult(result: unknown, redactor: SecretRedactor, summary: string): GatewayToolResult {
+async function normalizeResult(
+  result: unknown,
+  redactor: SecretRedactor,
+  summary: string,
+  protect: (data: unknown) => Promise<unknown>,
+): Promise<GatewayToolResult> {
   const content = (result as { content?: unknown } | null)?.content;
   const text = Array.isArray(content) ? (content[0] as { text?: unknown } | undefined)?.text : undefined;
   let data: unknown = null;
@@ -780,8 +819,9 @@ function normalizeResult(result: unknown, redactor: SecretRedactor, summary: str
       return errorResult(GATEWAY_FAILED_TEXT);
     }
   }
+  const kept = await protect(data);
   // Twice: the second pass, the last step, also covers what the first inserted (the depth placeholder).
-  return jsonResult(summary, redactDeep(redactDeep(data, redactor), redactor));
+  return jsonResult(summary, redactDeep(redactDeep(kept, redactor), redactor));
 }
 
 /**
