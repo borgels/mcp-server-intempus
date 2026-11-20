@@ -149,10 +149,17 @@ function isWorkTypeField(field: string): boolean {
   return field.includes('worktype') || field.includes('category');
 }
 
-/** Whether an object's own fields name a work type or category, or hold one's URI. */
-function pointsAtWorkType(value: Row): boolean {
+/**
+ * Whether a value names a work type or category anywhere inside it: a field about one, or a text holding one's URI,
+ * at any depth. Too deep to tell counts as pointing at one.
+ */
+function pointsAtWorkType(value: unknown, depth = 0): boolean {
+  if (depth > 64) return true;
+  if (typeof value === 'string') return WORK_TYPE_REF.test(value);
+  if (Array.isArray(value)) return value.some(entry => pointsAtWorkType(entry, depth + 1));
+  if (!isRow(value)) return false;
   return Object.entries(value).some(
-    ([key, entry]) => isWorkTypeField(fieldOf(key)) || (typeof entry === 'string' && WORK_TYPE_REF.test(entry)),
+    ([key, entry]) => isWorkTypeField(fieldOf(key)) || pointsAtWorkType(entry, depth + 1),
   );
 }
 
@@ -167,8 +174,8 @@ function withoutWorkTypeRefs(value: unknown, depth = 0): unknown {
     return value.map(entry => withoutWorkTypeRefs(entry, depth + 1)).filter(entry => entry !== undefined);
   }
   if (!isRow(value)) return value;
-  // A nested object that points at a work type or category (a URI among its values, or a field about one) is a
-  // reference itself: it goes whole, with its id and name.
+  // A nested object that points at a work type or category anywhere inside it (a field about one, or a text holding
+  // one's URI, at any depth) is a reference itself: it goes whole, with its id and name.
   if (depth > 0 && pointsAtWorkType(value)) return undefined;
   const out: Row = {};
   for (const [key, entry] of Object.entries(value)) {
