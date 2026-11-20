@@ -15,6 +15,9 @@ release, when one exists.
 
 ## Credential Handling
 
-This MCP server reads provider credentials only from the server environment and
-does not accept credentials as tool arguments. If you believe credentials were
+The MCP server reads provider credentials only from the server environment and
+does not accept credentials as tool arguments. The embeddable gateway
+(`mcp-server-intempus/gateway`) takes the API user and key only as options
+from the embedding host, never from the environment or from tool arguments,
+and sends the key only to `intempus.dk` (see the README, "Threat model"). If you believe credentials were
 exposed, rotate them with the upstream provider immediately.

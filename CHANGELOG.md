@@ -46,6 +46,9 @@ Embeddable gateway, HTTP transport, upstream client and supply chain.
   base URL, and so is the set of resources that need offset paging.
 - Error texts of the server's own checks no longer quote names from
   Intempus data (work type, work model, case names); they name ids and dates.
+  Values taken from a stored registration on an update (times, dates) are
+  not quoted either, and a registration whose stored date is not a date is
+  refused instead of changed.
 - The audit log records an error as a fixed code (`http_<status>`,
   `timeout`, `refused`, `error`) instead of its message.
 - Published to npm and the MCP Registry from tagged releases.

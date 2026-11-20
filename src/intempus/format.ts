@@ -160,9 +160,10 @@ export function addDays(date: string, days: number): string {
 /** "7:30" / "07:30" / "07:30:00" → "07:30:00". */
 export function normalizeTime(value: string): string {
   const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim());
-  if (!match) throw new IntempusToolError(`Invalid time "${value}"; use HH:MM.`);
+  // The value is not quoted: on an update it can come from the stored registration, which is Intempus' text.
+  if (!match) throw new IntempusToolError('Invalid time; use HH:MM.');
   const [hours, minutes, seconds] = [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)];
-  if (hours > 23 || minutes > 59 || seconds > 59) throw new IntempusToolError(`Invalid time "${value}".`);
+  if (hours > 23 || minutes > 59 || seconds > 59) throw new IntempusToolError('Invalid time: use 00:00 to 23:59.');
   return [hours, minutes, seconds].map(part => String(part).padStart(2, '0')).join(':');
 }
 

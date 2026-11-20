@@ -326,7 +326,8 @@ export async function deleteTime(client: IntempusClient, existing: IntempusObjec
  * or the report has no readable date.
  */
 export function assertExistingNotLocked(contracts: ContractSummary[], existing: IntempusObject): void {
-  const date = typeof existing.start_date === 'string' ? existing.start_date : undefined;
+  const stored = existing.start_date;
+  const date = typeof stored === 'string' && dateText(stored) === stored ? stored : undefined;
   if (!date) {
     throw new IntempusToolError(`Work report ${idText(existing.id)} has no readable date; refusing to change it.`);
   }
@@ -339,23 +340,27 @@ export function assertExistingNotLocked(contracts: ContractSummary[], existing: 
   }
 }
 
+/**
+ * On an update `input` is merged from the stored registration, so its values can be Intempus' text: error texts
+ * quote them only through idText and dateText.
+ */
 async function buildTimeBody(client: IntempusClient, target: TimeTarget, input: TimeInput): Promise<Record<string, unknown>> {
   const contract = contractOn(target.contracts, input.date);
   if (!contract) {
-    throw new IntempusToolError(`Employee ${target.employeeId} has no Intempus contract covering ${input.date}; time cannot be registered on that date.`);
+    throw new IntempusToolError(`Employee ${idText(target.employeeId)} has no Intempus contract covering ${dateText(input.date)}; time cannot be registered on that date.`);
   }
   if (contract.lockedDate && input.date <= contract.lockedDate) {
-    throw new IntempusToolError(`The period up to ${dateText(contract.lockedDate)} is locked on the employee's contract; ${input.date} cannot be changed.`);
+    throw new IntempusToolError(`The period up to ${dateText(contract.lockedDate)} is locked on the employee's contract; ${dateText(input.date)} cannot be changed.`);
   }
 
-  const workType = await client.get<IntempusObject>(`work_type/${input.workTypeId}/`);
+  const workType = await client.get<IntempusObject>(`work_type/${pathSegment(input.workTypeId)}/`);
   if (workType.active !== true) {
-    throw new IntempusToolError(`Work type ${input.workTypeId} is not active.`);
+    throw new IntempusToolError(`Work type ${idText(input.workTypeId)} is not active.`);
   }
   const workModelId = idFromUri(workType.work_model);
   if (target.strictWorkModel && contract.workModelId !== undefined && workModelId !== contract.workModelId) {
     throw new IntempusToolError(
-      `Work type ${input.workTypeId} belongs to work model ${idText(workModelId)}, ` +
+      `Work type ${idText(input.workTypeId)} belongs to work model ${idText(workModelId)}, ` +
         `not to the employee's work model ${idText(contract.workModelId)}. Use intempus_list_work_types to pick a valid one.`,
     );
   }
@@ -364,13 +369,13 @@ async function buildTimeBody(client: IntempusClient, target: TimeTarget, input: 
   // ("Projektarbejde skal være tilknyttet et projekt", verified 2026-09-29).
   const category = workType.work_category as { case_related?: unknown; name?: unknown } | string | null;
   if (input.caseId === undefined && category && typeof category === 'object' && category.case_related === true) {
-    throw new IntempusToolError(`Work type ${input.workTypeId} is project work and needs a caseId.`);
+    throw new IntempusToolError(`Work type ${idText(input.workTypeId)} is project work and needs a caseId.`);
   }
 
   if (input.caseId !== undefined) {
-    const kase = await client.get<IntempusObject>(`case/${input.caseId}/`);
+    const kase = await client.get<IntempusObject>(`case/${pathSegment(input.caseId)}/`);
     if (kase.active !== true || kase.permit_new_workreports === false) {
-      throw new IntempusToolError(`Case ${input.caseId} is closed for new time registrations.`);
+      throw new IntempusToolError(`Case ${idText(input.caseId)} is closed for new time registrations.`);
     }
   }
 
@@ -382,7 +387,7 @@ async function buildTimeBody(client: IntempusClient, target: TimeTarget, input: 
   // Intempus: "Start- og sluttid skal være angivet for denne arbejdstype"
   // for work types with report_interval (verified 2026-09-29).
   if (workType.report_interval === true && !(startTime && endTime)) {
-    throw new IntempusToolError(`Work type ${input.workTypeId} requires startTime and endTime, not just hours.`);
+    throw new IntempusToolError(`Work type ${idText(input.workTypeId)} requires startTime and endTime, not just hours.`);
   }
   const breakHours = input.breakHours ?? 0;
   const amount = input.hours ?? (startTime && endTime ? Math.max(0, hoursBetween(startTime, endTime) - breakHours) : undefined);
@@ -390,7 +395,7 @@ async function buildTimeBody(client: IntempusClient, target: TimeTarget, input: 
     throw new IntempusToolError('Give hours, or startTime and endTime.');
   }
   if (amount > 24) {
-    throw new IntempusToolError(`${amount} hours on one registration is more than a day; split it or check the input.`);
+    throw new IntempusToolError(`${Number(amount)} hours on one registration is more than a day; split it or check the input.`);
   }
 
   return {

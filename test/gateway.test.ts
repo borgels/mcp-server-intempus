@@ -463,6 +463,26 @@ describe('Intempus gateway errors', () => {
     expect(fake.writes()).toHaveLength(0);
   });
 
+  it('quotes no value of a stored registration in the errors of an update', async () => {
+    const fake = world();
+    const report = fake.db.work_report![0]!;
+    report.start_time = 'UPSTREAM_FREE_TEXT_ABCXYZ';
+    report.end_time = '17:00:00';
+    const gw = gateway(fake, { policy: { enableWrites: true } });
+    const badTime = await gw.callTool('manage_work_report', { action: 'update', workReportId: 900, remarks: 'Ny bemærkning' });
+    expect(text(badTime)).toBe('Invalid time; use HH:MM.');
+    report.start_time = '07:00:00';
+    report.start_date = 'UPSTREAM_DATE_ABCXYZ';
+    const badDate = await gw.callTool('manage_work_report', { action: 'update', workReportId: 900, remarks: 'Ny bemærkning' });
+    expect(text(badDate)).toBe('Work report 900 has no readable date; refusing to change it.');
+    report.start_date = '2026-09-28';
+    report.worktype = '/web/v1/work_type/UPSTREAM_TYPE_ABCXYZ/';
+    const badType = await gw.callTool('manage_work_report', { action: 'update', workReportId: 900, remarks: 'Ny bemærkning' });
+    expect(badType.isError).toBe(true);
+    expect(JSON.stringify([badTime, badDate, badType])).not.toContain('ABCXYZ');
+    expect(fake.writes()).toHaveLength(0);
+  });
+
   it('validates input with the tool schema before anything is sent, and refuses unknown fields and tools', async () => {
     const fake = world();
     const gw = gateway(fake, { policy: { enableWrites: true } });

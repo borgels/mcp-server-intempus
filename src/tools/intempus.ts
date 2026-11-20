@@ -1212,7 +1212,7 @@ async function offboardEmployee(client: IntempusClient, employeeId: number, date
   }
   const profileRow = await userProfileOf(client, employeeId);
   if (profileRow) {
-    await client.patch(`userprofile/${String(profileRow.id)}/`, { may_log_into_backend: false, may_log_into_approval: false });
+    await client.patch(`userprofile/${pathSegment(Number(profileRow.id))}/`, { may_log_into_backend: false, may_log_into_approval: false });
   }
   return { offboarded: employeeId, lastDay: date, endedContracts: ended, loginsRevoked: Boolean(profileRow) };
 }
