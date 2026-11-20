@@ -1,4 +1,4 @@
-import type { IntempusClient, IntempusObject } from './intempus/client.js';
+import { idFromUri, type IntempusClient, type IntempusObject } from './intempus/client.js';
 
 /**
  * Personal data the embeddable gateway leaves out of its results, whatever
@@ -58,6 +58,7 @@ export const RAW_ABSENCE_RESOURCES: ReadonlySet<string> = new Set([
   'planned_work_report',
   'incident',
   'missing_report_anomaly',
+  'schedule',
 ]);
 
 export const RAW_ABSENCE_REFUSED =
@@ -104,17 +105,21 @@ export const ABSENCE_VIEW_TOOLS: ReadonlySet<string> = new Set([
   'intempus_list_work_reports',
   'intempus_manage_work_report',
   'intempus_list_planned_work',
+  'intempus_list_schedules',
+  'intempus_manage_schedule',
 ]);
 
 /**
  * The work types of the company: for each id, whether it is a sensitive
- * absence type (an absence type whose name is not neutral). Read once per
- * call, inactive types included.
+ * absence type. Read once per call, inactive types included. Fail closed:
+ * only a type Intempus marks as no absence (`vacation_or_leave: false`) is
+ * not sensitive; an absence type, or one without the mark, is sensitive
+ * unless its name is neutral.
  */
 export async function sensitiveWorkTypes(client: IntempusClient): Promise<ReadonlyMap<number, boolean>> {
   const rows = (await client.listAll<IntempusObject>('work_type/', {}, 10_000)).items;
   return new Map(
-    rows.map(row => [Number(row.id), row.vacation_or_leave === true && !isNeutralAbsenceName(row.name)] as const),
+    rows.map(row => [Number(row.id), row.vacation_or_leave !== false && !isNeutralAbsenceName(row.name)] as const),
   );
 }
 
@@ -142,6 +147,27 @@ function maskPlanned(row: Row, types: ReadonlyMap<number, boolean>): Row {
   return rest;
 }
 
+/**
+ * A raw schedule row without the remarks and names of a sensitive absence: `remarks` is removed, and any field that
+ * names the work type or category (`work_type_name`, `work_type__name`, `work_category_name` …, or the `name` of an
+ * embedded work type or category) becomes "Absence".
+ * A schedule without a readable work type counts as sensitive (fail closed).
+ */
+function maskSchedule(row: Row, types: ReadonlyMap<number, boolean>): Row {
+  if (!sensitive(types, idFromUri(row.work_type))) return row;
+  return Object.fromEntries(
+    Object.entries(row)
+      .filter(([key]) => key !== 'remarks')
+      .map(([key, value]) => {
+        const field = key.toLowerCase().replace(/[-_\s.]/g, '');
+        if (!/^work(type|category)/.test(field)) return [key, value];
+        // A name field, or an embedded work type or category with its own name.
+        if (field.endsWith('name')) return [key, ABSENCE_NAME];
+        return [key, isRow(value) && 'name' in value ? { ...value, name: ABSENCE_NAME } : value];
+      }),
+  );
+}
+
 /** The result of a tool in ABSENCE_VIEW_TOOLS without sensitive absence reasons. */
 export function maskAbsenceViews(tool: string, data: unknown, types: ReadonlyMap<number, boolean>): unknown {
   if (!isRow(data)) return data;
@@ -150,6 +176,12 @@ export function maskAbsenceViews(tool: string, data: unknown, types: ReadonlyMap
   }
   if (tool === 'intempus_manage_work_report') {
     return maskWorkReport(data, types);
+  }
+  if (tool === 'intempus_list_schedules' && Array.isArray(data.schedules)) {
+    return { ...data, schedules: data.schedules.map(row => (isRow(row) ? maskSchedule(row, types) : row)) };
+  }
+  if (tool === 'intempus_manage_schedule') {
+    return maskSchedule(data, types);
   }
   if (tool === 'intempus_list_planned_work' && Array.isArray(data.planned)) {
     return { ...data, planned: data.planned.map(row => (isRow(row) ? maskPlanned(row, types) : row)) };

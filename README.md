@@ -182,14 +182,14 @@ offers only company-wide tools that need no identity, run as the admin role:
 | `list_customers` | read | on | no | `GET /customer/` |
 | `list_balances` | read | on | no | `GET /balance/` |
 | `get_employee_balances` | read | on | no | `GET /employee/`, `GET /balance/`, `GET /explored_employee_balance/` |
-| `list_schedules` | read | on | no | `GET /schedule/` |
+| `list_schedules` | read | on | no | `GET /schedule/`, `GET /work_type/` |
 | `list_planned_work` | read | on | no | `GET /planned_work_report/`, `GET /work_type/` |
 | `list_reference_data` | read | on | no | `GET /<kind>/` for the twelve reference lists |
 | `get_resource` | read | on | **yes** | `GET /{resource}/`, `GET /{resource}/{id}/` |
 | `manage_work_report` | write | off | no | reads of employee, work types, case and work report; `POST /work_report/`, `PATCH /work_report/{id}/` |
 | `manage_case` | write | off | no | `GET /case/`, `POST /case/`, `PATCH /case/{id}/`, `GET /case/{id}/` |
 | `manage_customer` | write | off | no | `GET /company/`, `POST /customer/`, `PATCH /customer/{id}/`, `GET /customer/{id}/` |
-| `manage_schedule` | write | off | no | `GET /company/`, `POST /schedule/`, `PATCH /schedule/{id}/`, `GET /schedule/{id}/` |
+| `manage_schedule` | write | off | no | `GET /company/`, `POST /schedule/`, `PATCH /schedule/{id}/`, `GET /schedule/{id}/`, `GET /work_type/` |
 | `manage_employee` | write | off | no | employee, company and userprofile reads; `POST /employee/`, `POST /contract/`, `PATCH /employee/{id}/`, `PATCH /contract/{id}/`, `PATCH /userprofile/{id}/` |
 | `manage_contract` | write | off | no | `POST /contract/`, `PATCH /contract/{id}/`, `GET /contract/{id}/` |
 | `manage_user_access` | write | off | no | `GET /userprofile/`, `POST /userprofile/`, `PATCH /userprofile/{id}/`, `GET /employee/{id}/` |
@@ -216,8 +216,10 @@ every gateway result (after the handler, before redaction;
   name is not exactly one of the neutral names (ferie, feriefri, feriefridag,
   afspadsering, timebank, fridag, helligdag, holiday, vacation, time off in
   lieu, case-insensitive) has the work type name `Absence` and no category or
-  remarks, and planned work of such a type has no remarks; a work type the
-  company does not have counts as such a type;
+  remarks, and planned work and schedules of such a type have no remarks
+  and no work type name; a work type not marked as no absence
+  (`vacation_or_leave: false`), or one the company does not have, counts as
+  an absence type (fail closed);
 - in `get_employee_balances`, the name of a balance that is not neutral
   (`Absence` instead; the numbers stay). `list_balances` and
   `list_work_types` show the company's own set-up unchanged.
@@ -226,8 +228,8 @@ every gateway result (after the handler, before redaction;
 resources that hold people's absence or its reasons in raw form:
 `work_report`, `historical_work_report`, `explored_employee_balance`,
 `holiday_year_balance`, `holiday_year_balance_work_type`,
-`work_type_balance`, `planned_work_report`, `incident` and
-`missing_report_anomaly`.
+`work_type_balance`, `planned_work_report`, `incident`,
+`missing_report_anomaly` and `schedule`.
 
 **Instance policy.** With `policy: { enableWrites, disabledTools, audit }`
 the host decides the instance's policy: the write tools run only with

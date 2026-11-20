@@ -274,10 +274,10 @@ const GATEWAY_TOOLS: ReadonlyArray<{
   {
     name: 'list_schedules',
     title: 'List schedules',
-    description: 'Planning schedules overlapping a period, optionally for one employee or case.',
+    description: 'Planning schedules overlapping a period, optionally for one employee or case. Planned absence other than holiday or time off has no remarks.',
     riskLevel: 'read',
     summary: 'Intempus schedules.',
-    upstream: [get('/schedule/')],
+    upstream: [get('/schedule/'), get('/work_type/')],
   },
   {
     name: 'list_planned_work',
@@ -300,7 +300,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
     name: 'get_resource',
     title: 'Read an Intempus resource',
     description:
-      'Read-only access to an allowlisted Intempus resource without its own tool (for example employee_work_type_rule or daily_rest_violation): one object by id, or a list with filters. Resources that hold people’s absence in raw form (time registrations, balances, planned work, incidents) are not available here. Passwords, PINs, private contact data and identity numbers are never returned.',
+      'Read-only access to an allowlisted Intempus resource without its own tool (for example employee_work_type_rule or daily_rest_violation): one object by id, or a list with filters. Resources that hold people’s absence in raw form (time registrations, balances, planned work, schedules, incidents) are not available here. Passwords, PINs, private contact data and identity numbers are never returned.',
     riskLevel: 'read',
     summary: 'Intempus resource.',
     upstream: [get('/{resource}/'), get('/{resource}/{id}/')],
@@ -347,7 +347,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
       'Plan work: employees, case, work type, date range, times, weekdays and recurrence. Intempus generates planned work from it. Deleting is not offered here.',
     riskLevel: 'write',
     summary: 'Intempus schedule saved.',
-    upstream: [get('/company/'), post('/schedule/'), patch('/schedule/{id}/'), get('/schedule/{id}/')],
+    upstream: [get('/company/'), post('/schedule/'), patch('/schedule/{id}/'), get('/schedule/{id}/'), get('/work_type/')],
   },
   {
     name: 'manage_employee',

@@ -15,16 +15,20 @@ Personal data in the embeddable gateway. The MCP server is unchanged.
     whose name is not on a fixed allowlist (ferie, feriefri, feriefridag,
     afspadsering, timebank, fridag, helligdag, holiday, vacation, time off in
     lieu) has the work type name `Absence` and no category or remarks;
-    planned work of such a type (`list_planned_work`) has no remarks. The
-    work types are read once per call (`GET /work_type/`, now in `upstream`);
+    planned work and schedules of such a type (`list_planned_work`,
+    `list_schedules`, `manage_schedule`) have no remarks and no work type
+    name. The work types are read once per call (`GET /work_type/`, now in
+    `upstream`); a work type not marked as no absence
+    (`vacation_or_leave: false`), or one the company does not have, counts as
+    an absence type (fail closed);
   - `get_employee_balances`: a balance whose name is not on the same
     allowlist is named `Absence`; the numbers stay. `list_balances` is
     unchanged.
 - `get_resource` refuses, with a fixed text and without a request,
   `work_report`, `historical_work_report`, `explored_employee_balance`,
   `holiday_year_balance`, `holiday_year_balance_work_type`,
-  `work_type_balance`, `planned_work_report`, `incident` and
-  `missing_report_anomaly`.
+  `work_type_balance`, `planned_work_report`, `incident`,
+  `missing_report_anomaly` and `schedule`.
 - Tool names, risk levels, `broad` and input schemas are unchanged.
 
 ## 0.3.0
