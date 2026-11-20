@@ -30,6 +30,16 @@
  *
  * Writes require INTEMPUS_ENABLE_WRITES=true on top.
  */
+import { IntempusToolError } from '../errors.js';
+import { currentInstancePolicy } from './call-scope.js';
+
+/*
+ * Inside a gateway call (src/intempus/call-scope.ts) none of the variables
+ * below is read: writes follow the host's policy.enableWrites (false when the
+ * host passes no policy), tools in policy.disabledTools are refused, and
+ * refusals are worded for the host. The gateway always runs as the admin role.
+ */
+
 export const ROLES = ['employee', 'approver', 'admin'] as const;
 export type IntempusRole = (typeof ROLES)[number];
 
@@ -55,9 +65,13 @@ export function trustForwardedUser(): boolean {
   return process.env.INTEMPUS_TRUST_FORWARDED_USER === 'true';
 }
 
+/** Whether write tools may run: the host's policy inside a gateway call, INTEMPUS_ENABLE_WRITES outside one. */
 export function writesEnabled(): boolean {
-  return process.env.INTEMPUS_ENABLE_WRITES === 'true';
+  const hosted = currentInstancePolicy();
+  return hosted ? hosted.enableWrites : process.env.INTEMPUS_ENABLE_WRITES === 'true';
 }
+
+const HOST_WRITES_OFF = 'Writes are disabled: the embedding host has not enabled writes for this instance.';
 
 /**
  * What an approver with a responsible level but NO responsible_for_*
@@ -68,8 +82,11 @@ export function approverUnassignedScope(): 'none' | 'all' {
 }
 
 export function assertWritesEnabled(action: string): void {
+  if (currentInstancePolicy() && !writesEnabled()) {
+    throw new IntempusToolError(HOST_WRITES_OFF);
+  }
   if (!writesEnabled()) {
-    throw new Error(
+    throw new IntempusToolError(
       `Write access is disabled on this Intempus MCP instance (${action}). ` +
         'Set INTEMPUS_ENABLE_WRITES=true in the server environment to allow write tools.',
     );
@@ -159,12 +176,19 @@ export interface IntempusPolicyDecision {
 }
 
 export function checkToolPolicy(toolName: string, roles: readonly IntempusRole[]): IntempusPolicyDecision {
+  const hosted = currentInstancePolicy();
+  if (hosted?.disabledTools.has(toolName)) {
+    return { allowed: false, reason: `tool is disabled on this instance by the embedding host: ${toolName}` };
+  }
   const label = roles.length ? roles.join('+') : 'no role';
   if (!toolNamesFor(roles).has(toolName)) {
     if (ALL_TOOLS.has(toolName)) {
       return { allowed: false, reason: `tool is not available for your roles (${label}): ${toolName}` };
     }
     return { allowed: false, reason: `tool is not allowlisted: ${toolName}` };
+  }
+  if (WRITE_TOOLS.has(toolName) && hosted && !hosted.enableWrites) {
+    return { allowed: false, reason: HOST_WRITES_OFF };
   }
   if (WRITE_TOOLS.has(toolName) && !writesEnabled()) {
     return {

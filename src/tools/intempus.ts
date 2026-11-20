@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod/v4';
-import { formatUnknownError } from '../errors.js';
+import { formatUnknownError, IntempusToolError } from '../errors.js';
+import { currentOfferedTools } from '../intempus/call-scope.js';
 import { writeAuditEvent } from '../intempus/audit.js';
 import {
   DESTRUCTIVE_TOOL_ANNOTATIONS,
@@ -48,6 +49,7 @@ import {
   REFERENCE_KINDS,
   updateTime,
   userProfileOf,
+  idText,
   type ReferenceKind,
   type TimeTarget,
 } from '../intempus/resources.js';
@@ -58,6 +60,8 @@ export interface RegisterOptions {
   onBehalfOf?: string;
   /** The user's roles (from X-MCP-Roles via the gateway); defaults to the configured roles. */
   roles?: readonly IntempusRole[];
+  /** Who the audit and creation ids name when there is no forwarded identity (the embeddable gateway). */
+  actingAs?: string;
 }
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD');
@@ -84,7 +88,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
   const available = toolNamesFor(roles);
   const isAdmin = roles.includes('admin');
   const isApprover = roles.includes('approver');
-  const actingAs = options.onBehalfOf ?? '(no forwarded identity)';
+  const actingAs = options.onBehalfOf ?? options.actingAs ?? '(no forwarded identity)';
 
   let selfPromise: Promise<ResolvedEmployee> | undefined;
   const self = (): Promise<ResolvedEmployee> => {
@@ -127,7 +131,12 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
       annotations: READ_TOOL_ANNOTATIONS,
     },
     async input =>
-      audited('intempus_search_capabilities', input, async () => jsonResult(searchCapabilities(input.query, input.limit, available))),
+      audited('intempus_search_capabilities', input, async () => {
+        // In a gateway call only the tools that instance offers.
+        const offered = currentOfferedTools();
+        const pool = offered ? new Set([...available].filter(name => offered.has(name))) : available;
+        return jsonResult(searchCapabilities(input.query, input.limit, pool));
+      }),
   );
 
   register(
@@ -367,7 +376,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
         const snapshot = await approver.load();
         const approved = input.status === 'all' ? undefined : input.status === 'approved';
         if (input.employeeId !== undefined && !(await approver.coversEmployee(input.employeeId))) {
-          throw new Error(`Employee ${input.employeeId} is not in your approval scope.`);
+          throw new IntempusToolError(`Employee ${input.employeeId} is not in your approval scope.`);
         }
         const base = { from: input.from, to: input.to, approved, limit: input.limit };
         if (snapshot.all || input.employeeId !== undefined) {
@@ -489,9 +498,9 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
         };
         try {
           if (input.action === 'create') {
-            if (!input.name) throw new Error('name is required to create an employee.');
+            if (!input.name) throw new IntempusToolError('name is required to create an employee.');
             const username = input.username ?? input.email;
-            if (!username) throw new Error('username (or email, used as username) is required to create an employee — use the sign-in address.');
+            if (!username) throw new IntempusToolError('username (or email, used as username) is required to create an employee — use the sign-in address.');
             await assertUniqueEmployee(client, input);
             const generated = input.password === undefined;
             const created = await createOrUpdate(
@@ -543,7 +552,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
           }
           return jsonResult(await offboardEmployee(client, employeeId, input.date ?? today()));
         } finally {
-          clearEmployeeCache();
+          clearEmployeeCache(client);
         }
       }),
   );
@@ -580,7 +589,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
         try {
           if (input.action === 'create') {
             if (!input.employeeId || !input.workModelId || !input.startDate) {
-              throw new Error('employeeId, workModelId and startDate are required to create a contract.');
+              throw new IntempusToolError('employeeId, workModelId and startDate are required to create a contract.');
             }
             return jsonResult(await createOrUpdate(client, 'contract', undefined, body, 'create contract'));
           }
@@ -588,7 +597,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
           await createOrUpdate(client, 'contract', contractId, { ...body, employee: undefined }, 'update contract');
           return jsonResult(await client.get(`contract/${contractId}/`));
         } finally {
-          clearEmployeeCache();
+          clearEmployeeCache(client);
         }
       }),
   );
@@ -732,12 +741,12 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
         const { action, workReportId, employeeId, ...fields } = input;
         if (action === 'create') {
           const target = await adminTarget(client, requireId(employeeId, 'employeeId'), actingAs);
-          if (!fields.date || !fields.workTypeId) throw new Error('date and workTypeId are required to create a work report.');
+          if (!fields.date || !fields.workTypeId) throw new IntempusToolError('date and workTypeId are required to create a work report.');
           return jsonResult(await createTime(client, target, { ...fields, date: fields.date, workTypeId: fields.workTypeId }));
         }
         const report = await getWorkReport(client, requireId(workReportId, 'workReportId'));
         if (report.isimmutable === true) {
-          throw new Error(`Work report ${String(report.id)} is locked; unlock it with intempus_prepare_admin_change first.`);
+          throw new IntempusToolError(`Work report ${idText(report.id)} is locked; it must be unlocked (intempus_prepare_admin_change) before it can be changed.`);
         }
         const target = await adminTarget(client, idFromUri(report.employee) ?? Number(report.employee_id), actingAs);
         return jsonResult(await updateTime(client, target, report, fields));
@@ -796,7 +805,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
           notes: input.notes,
         };
         if (input.action === 'create') {
-          if (!name || !input.customerId) throw new Error('name and customerId are required to create a case.');
+          if (!name || !input.customerId) throw new IntempusToolError('name and customerId are required to create a case.');
           await assertUniqueCase(client, name, input.number);
           const created = await createOrUpdate(client, 'case', undefined, { ...body, active: body.active ?? true, permit_new_workreports: body.permit_new_workreports ?? true }, 'create case');
           return jsonResult(created ? caseView(created) : { created: true, name });
@@ -854,7 +863,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
           vat_registration_number: input.vatNumber,
         };
         if (input.action === 'create') {
-          if (!input.name) throw new Error('name is required to create a customer.');
+          if (!input.name) throw new IntempusToolError('name is required to create a customer.');
           const created = await createOrUpdate(client, 'customer', undefined, { company: await companyUri(client), ...body }, 'create customer');
           return jsonResult(created ? customerView(created) : { created: true, name: input.name });
         }
@@ -982,7 +991,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
           ...weekdays,
         };
         if (input.action === 'create') {
-          if (!input.startDate || !input.employeeIds) throw new Error('employeeIds and startDate are required to create a schedule.');
+          if (!input.startDate || !input.employeeIds) throw new IntempusToolError('employeeIds and startDate are required to create a schedule.');
           return jsonResult(await createOrUpdate(client, 'schedule', undefined, { company: await companyUri(client), ...body }, 'create schedule'));
         }
         const scheduleId = requireId(input.scheduleId, 'scheduleId');
@@ -1093,7 +1102,7 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
   async function teamEmployeeIds(approver: ApproverScope, employeeId?: number): Promise<number[]> {
     if (employeeId !== undefined) {
       if (!(await approver.coversEmployee(employeeId))) {
-        throw new Error(`Employee ${employeeId} is not in your approval scope.`);
+        throw new IntempusToolError(`Employee ${employeeId} is not in your approval scope.`);
       }
       return [employeeId];
     }
@@ -1118,11 +1127,11 @@ async function ownReport(client: IntempusClient, me: ResolvedEmployee, workRepor
   try {
     report = await getWorkReport(client, workReportId);
   } catch {
-    throw new Error(`Work report ${workReportId} was not found among your registrations.`);
+    throw new IntempusToolError(`Work report ${workReportId} was not found among your registrations.`);
   }
   const owner = idFromUri(report.employee) ?? Number(report.employee_id);
   if (owner !== me.employeeId) {
-    throw new Error(`Work report ${workReportId} was not found among your registrations.`);
+    throw new IntempusToolError(`Work report ${workReportId} was not found among your registrations.`);
   }
   return report;
 }
@@ -1137,16 +1146,18 @@ function currentWorkModels(contracts: ReturnType<typeof contractsOf>): number[] 
   return [...new Set(ids)];
 }
 
-let companyUriCache: { baseUrl: string; uri: string } | undefined;
+/** Per client, so a gateway instance (one tenant) never uses another instance's company. */
+const companyUriCache = new WeakMap<IntempusClient, string>();
 
 async function companyUri(client: IntempusClient): Promise<string> {
-  if (companyUriCache?.baseUrl === client.baseUrl) return companyUriCache.uri;
+  const cached = companyUriCache.get(client);
+  if (cached) return cached;
   const companies = (await client.listAll<IntempusObject>('company/', {}, 10)).items;
   if (companies.length !== 1) {
-    throw new Error(`The API user sees ${companies.length} Intempus companies; exactly one is supported.`);
+    throw new IntempusToolError(`The API user sees ${companies.length} Intempus companies; exactly one is supported.`);
   }
   const uri = String(companies[0]!.resource_uri ?? client.uri('company', Number(companies[0]!.id)));
-  companyUriCache = { baseUrl: client.baseUrl, uri };
+  companyUriCache.set(client, uri);
   return uri;
 }
 
@@ -1154,25 +1165,25 @@ async function assertUniqueEmployee(client: IntempusClient, input: { number?: st
   const lower = (value: unknown) => String(value ?? '').trim().toLowerCase();
   for (const row of await listEmployeesCached(client)) {
     if (input.number && String(row.number ?? '') === input.number) {
-      throw new Error(`Employee number ${input.number} is already used by employee ${String(row.id)}.`);
+      throw new IntempusToolError(`Employee number ${input.number} is already used by employee ${idText(row.id)}.`);
     }
     if (input.username && lower(row.username) === lower(input.username)) {
-      throw new Error(`Username ${input.username} is already used by employee ${String(row.id)}.`);
+      throw new IntempusToolError(`Username ${input.username} is already used by employee ${idText(row.id)}.`);
     }
     if (input.email && lower(row.email) === lower(input.email)) {
-      throw new Error(`Email ${input.email} is already used by employee ${String(row.id)}; self-service identity must be unique.`);
+      throw new IntempusToolError(`Email ${input.email} is already used by employee ${idText(row.id)}; self-service identity must be unique.`);
     }
   }
 }
 
 async function findEmployeeId(client: IntempusClient, input: { number?: string; username?: string; name?: string }): Promise<number> {
-  clearEmployeeCache();
+  clearEmployeeCache(client);
   const rows = await listEmployeesCached(client);
   const match = rows.find(row =>
     (input.number && String(row.number ?? '') === input.number) ||
     (input.username && String(row.username ?? '') === input.username),
   );
-  if (!match) throw new Error('Employee was created but could not be read back; look it up with intempus_list_employees.');
+  if (!match) throw new IntempusToolError('Employee was created but could not be read back; look it up with intempus_list_employees.');
   return Number(match.id);
 }
 
@@ -1182,7 +1193,7 @@ async function assertUniqueCase(client: IntempusClient, name: string, number?: s
     (number && String(row.number ?? '') === number) || String(row.name ?? '').trim().toLowerCase() === name.trim().toLowerCase(),
   );
   if (clash) {
-    throw new Error(`Case ${String(clash.id)} "${String(clash.name)}" (number ${String(clash.number)}) already exists; update it instead.`);
+    throw new IntempusToolError(`Case ${idText(clash.id)} with the same number or name already exists; update it instead.`);
   }
 }
 
@@ -1193,7 +1204,7 @@ async function offboardEmployee(client: IntempusClient, employeeId: number, date
   for (const contract of contractsOf(row)) {
     if (!contract.endDate || contract.endDate > date) {
       if (contract.startDate && contract.startDate > date) {
-        throw new Error(`Contract ${contract.id} starts after ${date}; end or delete it explicitly.`);
+        throw new IntempusToolError(`Contract ${contract.id} starts after ${date}; end or delete it explicitly.`);
       }
       await client.patch(`contract/${contract.id}/`, { end_date: date });
       ended.push({ contractId: contract.id, endDate: date });
@@ -1209,7 +1220,7 @@ async function offboardEmployee(client: IntempusClient, employeeId: number, date
 function parseOperation(value: Record<string, unknown>): PreparedOperation {
   const operation = value as unknown as PreparedOperation;
   if (!Array.isArray(operation.steps) || typeof operation.kind !== 'string' || typeof operation.expiresAt !== 'string') {
-    throw new Error('operation is not a prepared operation; pass it exactly as intempus_prepare_admin_change returned it.');
+    throw new IntempusToolError('operation is not a prepared operation; pass it exactly as intempus_prepare_admin_change returned it.');
   }
   return operation;
 }
@@ -1221,12 +1232,12 @@ function nullableUri(client: IntempusClient, resource: string, id: number | null
 }
 
 function requireId(value: number | undefined, name: string): number {
-  if (value === undefined) throw new Error(`${name} is required for this action.`);
+  if (value === undefined) throw new IntempusToolError(`${name} is required for this action.`);
   return value;
 }
 
 function required<T>(value: T | undefined, name: string): T {
-  if (value === undefined) throw new Error(`${name} is required for this action.`);
+  if (value === undefined) throw new IntempusToolError(`${name} is required for this action.`);
   return value;
 }
 
@@ -1252,7 +1263,7 @@ async function run<T>(
 
   if (!policy.allowed) {
     await writeAuditEvent({ ...base, action: 'policy_denied', target, reason: policy.reason });
-    throw new Error(policy.reason);
+    throw new IntempusToolError(policy.reason);
   }
 
   await writeAuditEvent({ ...base, action: 'start', target, reason: policy.reason });
@@ -1262,7 +1273,7 @@ async function run<T>(
     await writeAuditEvent({ ...base, action: 'finish', target, status: 'ok' });
     return result;
   } catch (error) {
-    await writeAuditEvent({ ...base, action: 'error', target, status: 'error', error: formatUnknownError(error) });
+    await writeAuditEvent({ ...base, action: 'error', target, status: 'error', error });
     throw error;
   }
 }
