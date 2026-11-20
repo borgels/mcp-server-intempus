@@ -169,14 +169,15 @@ function pointsAtWorkType(value: unknown, depth = 0): boolean {
  */
 function withoutWorkTypeRefs(value: unknown, depth = 0): unknown {
   if (depth > 64) return undefined;
-  if (typeof value === 'string') return WORK_TYPE_REF.test(value) ? undefined : value;
+  // Below the row itself, a value that points at a work type or category anywhere inside it (a field about one, or a
+  // text holding one's URI, at any depth) is a reference itself: an object or a list goes whole, with every id and
+  // name next to the reference.
+  if (depth > 0 && pointsAtWorkType(value)) return undefined;
+  if (typeof value === 'string') return value;
   if (Array.isArray(value)) {
     return value.map(entry => withoutWorkTypeRefs(entry, depth + 1)).filter(entry => entry !== undefined);
   }
   if (!isRow(value)) return value;
-  // A nested object that points at a work type or category anywhere inside it (a field about one, or a text holding
-  // one's URI, at any depth) is a reference itself: it goes whole, with its id and name.
-  if (depth > 0 && pointsAtWorkType(value)) return undefined;
   const out: Row = {};
   for (const [key, entry] of Object.entries(value)) {
     const field = fieldOf(key);

@@ -598,7 +598,7 @@ describe('Intempus gateway personal data', () => {
     fake.db.schedule = [
       { id: 930, employees: [uri('employee', 2)], work_type: uri('work_type', 53), work_type__name: 'Sygdom', start_date: '2026-09-01', end_date: null, remarks: 'Operation i knæet' },
       { id: 931, employees: [uri('employee', 2)], work_type: uri('work_type', 50), work_type__name: 'Projekttimer', start_date: '2026-09-01', end_date: null, remarks: 'Montage' },
-      { id: 932, employees: [uri('employee', 2)], work_type: { id: 53, resource_uri: uri('work_type', 53), name: 'Sygdom', work_category: { id: 5, name: 'Helbredsfravær' } }, start_date: '2026-09-01', end_date: null, remarks: 'Genoptræning', note: 'Fysioterapi', extra: [{ category_name: 'Helbredsfravær', keep: 'ok' }, { resource_uri: uri('work_type', 53), id: 53, name: 'Sygdom' }, { nested: { link: uri('work_category', 5), id: 5, name: 'Helbredsfravær' }, keep: 'ok' }, { id: 53, name: 'Sygdom', links: [uri('work_type', 53)] }, { id: 53, name: 'Sygdom', sub: { deeper: [{ category_id: 5 }] } }, { keep: 'ok' }], solo: { id: 53, name: 'Sygdom', links: [uri('work_type', 53)] } },
+      { id: 932, employees: [uri('employee', 2)], work_type: { id: 53, resource_uri: uri('work_type', 53), name: 'Sygdom', work_category: { id: 5, name: 'Helbredsfravær' } }, start_date: '2026-09-01', end_date: null, remarks: 'Genoptræning', note: 'Fysioterapi', extra: [{ category_name: 'Helbredsfravær', keep: 'ok' }, { resource_uri: uri('work_type', 53), id: 53, name: 'Sygdom' }, { nested: { link: uri('work_category', 5), id: 5, name: 'Helbredsfravær' }, keep: 'ok' }, { id: 53, name: 'Sygdom', links: [uri('work_type', 53)] }, { id: 53, name: 'Sygdom', sub: { deeper: [{ category_id: 5 }] } }, { keep: 'ok' }], solo: { id: 53, name: 'Sygdom', links: [uri('work_type', 53)] }, harmless: [{ keep: 'ok' }], flat: [53, 'Sygdom', uri('work_type', 53)], deepList: [[53, 'Sygdom', [uri('work_category', 5)]]] },
     ];
     fake.db.work_report.push({ id: 913, employee: uri('employee', 2), employee_id: '2', start_date: '2026-09-24', amount: '7.5', worktype: uri('work_type', 55), worktype_name: 'Barn syg', remarks: 'Mæslinger', approved_by: [] });
     fake.db.planned_work_report = [
@@ -684,9 +684,12 @@ describe('Intempus gateway personal data', () => {
       (data(schedules).schedules as Array<Record<string, any>>).find(row => row.id === 930)!,
       (data(schedules).schedules as Array<Record<string, any>>).find(row => row.id === 932)!,
     ];
-    // Objects that point at a work type or category anywhere inside them go whole, with their id and name.
-    expect(masked[4]!.extra).toEqual([{ keep: 'ok' }]);
+    // Objects and lists that point at a work type or category anywhere inside them go whole, with every id and name.
+    expect(masked[4]).not.toHaveProperty('extra');
+    expect(masked[4]!.harmless).toEqual([{ keep: 'ok' }]);
     expect(masked[4]).not.toHaveProperty('solo');
+    expect(masked[4]).not.toHaveProperty('flat');
+    expect(masked[4]).not.toHaveProperty('deepList');
     for (const row of masked) {
       expect(row.workType).toMatchObject({ name: 'Absence' });
       expect(Object.keys(row.workType).filter(key => key !== 'unit')).toEqual(['name']);
