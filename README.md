@@ -225,7 +225,8 @@ every gateway result (after the handler, before redaction;
   cannot be linked back through `list_work_types`; only
   `workType: { name: "Absence" }` remains;
 - in `get_employee_balances`, the name of a balance that is not neutral
-  (`Absence` instead; the numbers stay). `list_balances` and
+  (`Absence` instead; the numbers and the employee stay, but no `balanceId`,
+  unit or other reference to the definition). `list_balances` and
   `list_work_types` show the company's own set-up unchanged.
 
 `get_resource` refuses, with a fixed text and without a request, the
