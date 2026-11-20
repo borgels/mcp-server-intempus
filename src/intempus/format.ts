@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { idFromUri, type IntempusObject } from './client.js';
+import { IntempusToolError } from '../errors.js';
 import { contractsOf } from './identity.js';
 
 /**
@@ -159,9 +160,9 @@ export function addDays(date: string, days: number): string {
 /** "7:30" / "07:30" / "07:30:00" → "07:30:00". */
 export function normalizeTime(value: string): string {
   const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim());
-  if (!match) throw new Error(`Invalid time "${value}"; use HH:MM.`);
+  if (!match) throw new IntempusToolError(`Invalid time "${value}"; use HH:MM.`);
   const [hours, minutes, seconds] = [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)];
-  if (hours > 23 || minutes > 59 || seconds > 59) throw new Error(`Invalid time "${value}".`);
+  if (hours > 23 || minutes > 59 || seconds > 59) throw new IntempusToolError(`Invalid time "${value}".`);
   return [hours, minutes, seconds].map(part => String(part).padStart(2, '0')).join(':');
 }
 

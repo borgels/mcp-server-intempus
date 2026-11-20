@@ -127,7 +127,7 @@ export async function commitPreparedOperation(client: IntempusClient, operation:
     }
   }
   if (operation.kind === 'delete' || operation.kind === 'set_contract_locked_date') {
-    clearEmployeeCache();
+    clearEmployeeCache(client);
   }
   const failed = results.find(result => !result.ok);
   return {

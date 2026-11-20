@@ -25,29 +25,40 @@ export interface ResolvedEmployee {
 }
 
 const CACHE_TTL_MS = 60_000;
-const employeeCache = new Map<string, { at: number; rows: Promise<IntempusObject[]> }>();
+/** Per client, so a gateway instance (one tenant) never sees another instance's employees. */
+const employeeCache = new WeakMap<IntempusClient, { at: number; rows: Promise<IntempusObject[]> }>();
 
 /**
- * All employees, cached briefly per API base URL. Intempus does not allow
+ * All employees, cached briefly per client. Intempus does not allow
  * filtering employees on email ("The 'email' field does not allow
  * filtering", verified 2026-09-29) and username has no case-insensitive
  * filter, so identity is matched in memory. Companies here are small.
  */
 export async function listEmployeesCached(client: IntempusClient): Promise<IntempusObject[]> {
-  const key = client.baseUrl;
-  const hit = employeeCache.get(key);
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
+  const hit = employeeCache.get(client);
+  if (hit && hit.at > clearedAt && Date.now() - hit.at < CACHE_TTL_MS) {
     return hit.rows;
   }
   const rows = client.listAll<IntempusObject>('employee/', {}, 10_000).then(result => result.items);
-  employeeCache.set(key, { at: Date.now(), rows });
-  rows.catch(() => employeeCache.delete(key));
+  const entry = { at: Date.now(), rows };
+  employeeCache.set(client, entry);
+  rows.catch(() => {
+    if (employeeCache.get(client) === entry) employeeCache.delete(client);
+  });
   return rows;
 }
 
-export function clearEmployeeCache(): void {
-  employeeCache.clear();
+/** Forget the cached employees of one client (after a change), or of every client. */
+export function clearEmployeeCache(client?: IntempusClient): void {
+  if (client) {
+    employeeCache.delete(client);
+  } else {
+    clearedAt = Date.now();
+  }
 }
+
+/** Entries cached before this time are stale (clearEmployeeCache() without a client; a WeakMap cannot be cleared). */
+let clearedAt = 0;
 
 /**
  * Explicit sign-in address (UPN) → Intempus employee number overrides, for employees
