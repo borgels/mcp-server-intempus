@@ -158,7 +158,7 @@ const SAMPLE_INPUTS: Record<string, Array<Record<string, unknown>>> = {
     'companies',
   ].map(kind => ({ kind })),
   get_resource: [
-    { resource: 'work_report', id: 900 },
+    { resource: 'case', id: 60 },
     { resource: 'daily_rest_violation', filters: { start_date__gte: '2026-09-01' } },
   ],
   manage_work_report: [
@@ -578,5 +578,147 @@ describe('Intempus gateway tenants', () => {
     await outer.callTool('list_cases', {});
     expect(text(innerResult!)).toMatch(/Writes are disabled/);
     expect(inner.writes()).toHaveLength(0);
+  });
+});
+
+describe('Intempus gateway personal data', () => {
+  function absenceWorld(): FakeIntempus {
+    const fake = world();
+    for (const row of fake.db.work_type!) row.vacation_or_leave = false;
+    fake.db.work_type!.push(
+      { id: 53, name: 'Sygdom', active: true, vacation_or_leave: true, work_model: uri('work_model', 10) },
+      { id: 55, name: 'Barn syg', active: true, work_model: uri('work_model', 10) },
+      { id: 54, name: 'Ferie', active: true, vacation_or_leave: true, work_model: uri('work_model', 10) },
+    );
+    fake.db.work_report = [
+      { id: 910, employee: uri('employee', 2), employee_id: '2', start_date: '2026-09-21', amount: '7.5', worktype: uri('work_type', 53), worktype_name: 'Sygdom', work_category_name: 'Fravær', remarks: 'Influenza og feber', additional_remarks: 'Lægeerklæring', approved_by: [] },
+      { id: 911, employee: uri('employee', 2), employee_id: '2', start_date: '2026-09-22', amount: '7.5', worktype: uri('work_type', 54), worktype_name: 'Ferie', work_category_name: 'Fravær', remarks: 'Sommerhus', approved_by: [] },
+      { id: 912, employee: uri('employee', 2), employee_id: '2', start_date: '2026-09-23', amount: '7.5', worktype: uri('work_type', 50), worktype_name: 'Projekttimer', remarks: 'Montage', approved_by: [] },
+    ];
+    fake.db.schedule = [
+      { id: 930, employees: [uri('employee', 2)], work_type: uri('work_type', 53), work_type__name: 'Sygdom', start_date: '2026-09-01', end_date: null, remarks: 'Operation i knæet' },
+      { id: 931, employees: [uri('employee', 2)], work_type: uri('work_type', 50), work_type__name: 'Projekttimer', start_date: '2026-09-01', end_date: null, remarks: 'Montage' },
+      { id: 932, employees: [uri('employee', 2)], work_type: { id: 53, resource_uri: uri('work_type', 53), name: 'Sygdom', work_category: { id: 5, name: 'Helbredsfravær' } }, start_date: '2026-09-01', end_date: null, remarks: 'Genoptræning', note: 'Fysioterapi' },
+    ];
+    fake.db.work_report.push({ id: 913, employee: uri('employee', 2), employee_id: '2', start_date: '2026-09-24', amount: '7.5', worktype: uri('work_type', 55), worktype_name: 'Barn syg', remarks: 'Mæslinger', approved_by: [] });
+    fake.db.planned_work_report = [
+      { id: 920, employee: uri('employee', 2), worktype: uri('work_type', 53), start_date: '2099-01-02', remarks: 'Operation i knæet' },
+      { id: 921, employee: uri('employee', 2), worktype: uri('work_type', 50), start_date: '2099-01-03', remarks: 'Montage' },
+      { id: 922, employee: uri('employee', 2), worktype: null, start_date: '2099-01-04', remarks: 'Kemoterapi' },
+    ];
+    fake.db.balance = [
+      { id: 20, name: 'Ferie', unit: 'days', visible: true },
+      { id: 21, name: 'Sygdom', unit: 'days', visible: true },
+    ];
+    fake.db.explored_employee_balance = [
+      { id: 1, employee_pk: 2, balance_pk: 20, positive_sum: '10', negative_sum: '2', start_date: '2000-01-01', end_date: '2026-09-30' },
+      { id: 2, employee_pk: 2, balance_pk: 21, positive_sum: '3', negative_sum: '0', start_date: '2000-01-01', end_date: '2026-09-30' },
+    ];
+    fake.db.employee![1]!.personal_email = 'bo.private@example.net';
+    fake.db.employee![1]!.next_of_kin_name = 'Pårørende Person';
+    fake.db.employee![1]!.emergency_contact_phone = '+4512345678';
+    fake.db.employee![1]!.cpr_number = '010190-1234';
+    fake.db.employee![1]!.birth_date = '1990-01-01';
+    return fake;
+  }
+
+  it('shows a sensitive absence type as Absence without its reason, and a neutral one as it is', async () => {
+    const fake = absenceWorld();
+    const result = await gateway(fake).callTool('list_work_reports', { from: '2026-09-20', to: '2026-09-30' });
+    const rows = data(result).workReports as Array<Record<string, any>>;
+    const sick = rows.find(row => row.id === 910)!;
+    expect(sick.workType.name).toBe('Absence');
+    expect(sick).not.toHaveProperty('category');
+    expect(sick).not.toHaveProperty('remarks');
+    expect(sick).not.toHaveProperty('additionalRemarks');
+    expect(sick.amount).toBe(7.5);
+    const holiday = rows.find(row => row.id === 911)!;
+    expect(holiday.workType.name).toBe('Ferie');
+    expect(holiday.remarks).toBe('Sommerhus');
+    expect(rows.find(row => row.id === 912)!.remarks).toBe('Montage');
+    expect(JSON.stringify(result)).not.toMatch(/Sygdom|Influenza|Lægeerklæring/);
+  });
+
+  it('treats a work type without the absence mark as sensitive (fail closed)', async () => {
+    const result = await gateway(absenceWorld()).callTool('list_work_reports', { from: '2026-09-20', to: '2026-09-30' });
+    const row = (data(result).workReports as Array<Record<string, any>>).find(entry => entry.id === 913)!;
+    expect(row.workType.name).toBe('Absence');
+    expect(row).not.toHaveProperty('remarks');
+    expect(JSON.stringify(result)).not.toMatch(/Barn syg|Mæslinger/);
+  });
+
+  it('masks the reason in schedules, listed and saved', async () => {
+    const fake = absenceWorld();
+    const gw = gateway(fake, { policy: { enableWrites: true } });
+    const listed = await gw.callTool('list_schedules', {});
+    const rows = data(listed).schedules as Array<Record<string, any>>;
+    const sick = rows.find(row => row.id === 930)!;
+    expect(sick).not.toHaveProperty('remarks');
+    expect(sick.work_type__name).toBe('Absence');
+    expect(rows.find(row => row.id === 931)!.remarks).toBe('Montage');
+    const saved = await gw.callTool('manage_schedule', { action: 'update', scheduleId: 930, remarks: 'Genoptræning' });
+    expect(saved.isError).toBeUndefined();
+    const embedded = rows.find(row => row.id === 932)!;
+    expect(embedded.work_type).toEqual({ id: 53, resource_uri: uri('work_type', 53), name: 'Absence' });
+    expect(JSON.stringify([listed, saved])).not.toMatch(/Sygdom|Operation|Genoptræning|Helbredsfravær|Fysioterapi/);
+  });
+
+  it('masks the reason in the answer of manage_work_report and in planned work', async () => {
+    const fake = absenceWorld();
+    const gw = gateway(fake, { policy: { enableWrites: true } });
+    const saved = await gw.callTool('manage_work_report', { action: 'update', workReportId: 910, remarks: 'Stadig syg' });
+    expect(saved.isError).toBeUndefined();
+    expect(data(saved).workType.name).toBe('Absence');
+    expect(JSON.stringify(saved)).not.toMatch(/Sygdom|Stadig syg|Lægeerklæring/);
+    const planned = await gw.callTool('list_planned_work', { from: '2099-01-01', to: '2099-01-10' });
+    const result = planned;
+    const rows = data(planned).planned as Array<Record<string, any>>;
+    expect(rows.find(row => row.id === 920)).not.toHaveProperty('remarks');
+    expect(rows.find(row => row.id === 921)!.remarks).toBe('Montage');
+    // No work type: treated as absence (fail closed), through serialisation.
+    expect(rows.find(row => row.id === 922)).not.toHaveProperty('remarks');
+    expect(result.content[0]!.text).not.toContain('Kemoterapi');
+  });
+
+  it('names a sensitive balance Absence and keeps the numbers; the definitions stay', async () => {
+    const fake = absenceWorld();
+    const gw = gateway(fake);
+    const result = await gw.callTool('get_employee_balances', { employeeIds: [2], to: '2026-09-30' });
+    const balances = data(result).balances as Array<Record<string, any>>;
+    expect(balances.map(row => [row.balance, row.net])).toEqual([
+      ['Ferie', 8],
+      ['Absence', 3],
+    ]);
+    expect(JSON.stringify(result)).not.toContain('Sygdom');
+    const definitions = await gw.callTool('list_balances', {});
+    expect(JSON.stringify(definitions)).toContain('Sygdom');
+  });
+
+  it('leaves out private contact data and identity numbers, in views and raw rows', async () => {
+    const fake = absenceWorld();
+    const gw = gateway(fake);
+    const outputs = [
+      await gw.callTool('get_employee', { employeeId: 2 }),
+      await gw.callTool('list_employees', {}),
+      await gw.callTool('get_resource', { resource: 'employee', id: 2 }),
+      await gw.callTool('get_resource', { resource: 'employee' }),
+    ];
+    for (const result of outputs) expect(result.isError).toBeUndefined();
+    const all = JSON.stringify(outputs);
+    for (const forbidden of ['personalEmail', 'personal_email', 'bo.private@example.net', 'next_of_kin', 'Pårørende Person', 'emergency_contact', '+4512345678', 'cpr_number', '010190-1234', 'birth_date', '1990-01-01']) {
+      expect(all, forbidden).not.toContain(forbidden);
+    }
+    expect(data(outputs[0]!).name).toBe('Bo');
+  });
+
+  it('refuses raw absence resources in get_resource without a request', async () => {
+    const fake = absenceWorld();
+    const gw = gateway(fake);
+    for (const resource of ['work_report', 'historical_work_report', 'explored_employee_balance', 'holiday_year_balance', 'holiday_year_balance_work_type', 'work_type_balance', 'planned_work_report', 'incident', 'missing_report_anomaly', 'schedule']) {
+      const result = await gw.callTool('get_resource', { resource });
+      expect(result.isError, resource).toBe(true);
+      expect(text(result)).toMatch(/^This resource is not available through this connection/);
+    }
+    expect(fake.calls).toHaveLength(0);
   });
 });
