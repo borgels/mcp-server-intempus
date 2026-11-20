@@ -137,33 +137,47 @@ const FREE_TEXT_FIELD = /remark|note|comment|description|reason/;
 
 const fieldOf = (key: string): string => key.toLowerCase().replace(/[-_\s.]/g, '');
 
-/** An embedded work type or category, reduced to its id and resource URI, named "Absence". */
-function absenceRef(value: unknown): unknown {
-  if (!isRow(value)) return value;
-  return {
-    ...(typeof value.id === 'number' ? { id: value.id } : {}),
-    ...(typeof value.resource_uri === 'string' ? { resource_uri: value.resource_uri } : {}),
-    name: ABSENCE_NAME,
-  };
+/** A text that points at a work type or work category (a resource URI such as /web/v1/work_type/53/). */
+const WORK_TYPE_REF = /work_?(type|category)\/\d/i;
+
+/** Whether a field is about the work type or category (its id, URI, name or an embedded object), or a category. */
+function isWorkTypeField(field: string): boolean {
+  return /^work(type|category)/.test(field) || field === 'category' || field.startsWith('categoryid');
 }
 
 /**
- * A row of a sensitive absence: every free-text field (remarks, notes, comments, descriptions, reasons) and every
- * category name removed, and every field about the work type or category named "Absence" (an embedded work type or
- * category is reduced to its id and URI).
+ * A value of a masked row with, at any depth, every free-text field and every reference to a work type or category
+ * removed: fields about them (ids, URIs, names, embedded objects) and texts that hold such a URI.
  */
-function maskedRow(row: Row): Row {
+function withoutWorkTypeRefs(value: unknown, depth = 0): unknown {
+  if (depth > 64) return undefined;
+  if (typeof value === 'string') return WORK_TYPE_REF.test(value) ? undefined : value;
+  if (Array.isArray(value)) {
+    return value.map(entry => withoutWorkTypeRefs(entry, depth + 1)).filter(entry => entry !== undefined);
+  }
+  if (!isRow(value)) return value;
   const out: Row = {};
-  for (const [key, value] of Object.entries(row)) {
+  for (const [key, entry] of Object.entries(value)) {
     const field = fieldOf(key);
-    if (FREE_TEXT_FIELD.test(field) || field === 'category') continue;
-    if (/^work(type|category)/.test(field) || field === 'worktype' || field === 'workcategory') {
-      out[key] = field.endsWith('name') ? ABSENCE_NAME : isRow(value) ? absenceRef(value) : value;
-      continue;
-    }
-    out[key] = value;
+    if (FREE_TEXT_FIELD.test(field) || isWorkTypeField(field)) continue;
+    const kept = withoutWorkTypeRefs(entry, depth + 1);
+    if (kept !== undefined) out[key] = kept;
   }
   return out;
+}
+
+/**
+ * A row of a sensitive absence. It keeps no free text (remarks, notes, comments, descriptions, reasons) and no
+ * reference to its work type or category at any depth (no id, URI, name or embedded object, so it cannot be linked
+ * back to a work type through list_work_types); only `workType: { name: "Absence" }`, with the unit when the row
+ * had one, says what it is.
+ */
+function maskedRow(row: Row): Row {
+  const unit = isRow(row.workType) && typeof row.workType.unit === 'string' ? row.workType.unit : undefined;
+  return {
+    ...(withoutWorkTypeRefs(row) as Row),
+    workType: { name: ABSENCE_NAME, ...(unit !== undefined ? { unit } : {}) },
+  };
 }
 
 /**
@@ -172,19 +186,17 @@ function maskedRow(row: Row): Row {
  */
 function maskWorkReport(row: Row, types: ReadonlyMap<number, boolean>): Row {
   const workType = isRow(row.workType) ? row.workType : undefined;
-  if (!sensitive(types, workType?.id)) return row;
-  const masked = maskedRow(row);
-  return workType ? { ...masked, workType: { ...absenceRef(workType) as Row, ...(workType.unit !== undefined ? { unit: workType.unit } : {}) } } : masked;
+  return sensitive(types, workType?.id) ? maskedRow(row) : row;
 }
 
-/** A planned work view (plannedView) without the remarks of a sensitive absence; no work type id counts as sensitive. */
+/** A planned work view (plannedView) of a sensitive absence (maskedRow); no work type id counts as sensitive. */
 function maskPlanned(row: Row, types: ReadonlyMap<number, boolean>): Row {
   return sensitive(types, row.workTypeId) ? maskedRow(row) : row;
 }
 
 /**
- * A raw schedule row without the remarks and names of a sensitive absence (maskedRow). A schedule without a
- * readable work type counts as sensitive (fail closed).
+ * A raw schedule row of a sensitive absence (maskedRow). A schedule without a readable work type counts as
+ * sensitive (fail closed).
  */
 function maskSchedule(row: Row, types: ReadonlyMap<number, boolean>): Row {
   return sensitive(types, idFromUri(row.work_type)) ? maskedRow(row) : row;
