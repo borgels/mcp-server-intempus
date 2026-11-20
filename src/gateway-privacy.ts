@@ -13,7 +13,8 @@ import { idFromUri, type IntempusClient, type IntempusObject } from './intempus/
  *   work type (`vacation_or_leave`) whose name is not on NEUTRAL_ABSENCE_NAMES
  *   is shown with the work type name "Absence", without category and remarks.
  * - Balances per employee: a balance whose name is not on
- *   NEUTRAL_ABSENCE_NAMES is shown as "Absence"; the numbers stay.
+ *   NEUTRAL_ABSENCE_NAMES is shown as "Absence", with only the employee and
+ *   the numbers (no id or unit that links it back to its definition).
  * - Raw resources that hold people's absence or its reasons are not read
  *   through get_resource (RAW_ABSENCE_RESOURCES).
  */
@@ -245,13 +246,30 @@ export function maskAbsenceViews(tool: string, data: unknown, types: ReadonlyMap
   return data;
 }
 
-/** get_employee_balances without the names of sensitive balances: those are "Absence", the numbers stay. */
+/** The fields a masked balance row keeps: the employee and the numbers (src/intempus/resources.ts, employeeBalances). */
+const MASKED_BALANCE_FIELDS = ['employeeId', 'positive', 'negative', 'net', 'advanceSpent', 'advanceRemaining'] as const;
+
+/** A number, or a numeric text, kept as it is; anything else (an object, a URI) is not kept. */
+const isPlainNumber = (value: unknown): boolean =>
+  (typeof value === 'number' && Number.isFinite(value)) || (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value));
+
+/**
+ * get_employee_balances without the names of sensitive balances. A balance whose name is not neutral becomes a row
+ * of only the employee, `balance: "Absence"` and the numbers, built from an allowlist of fields (fail closed): no
+ * `balanceId`, unit or any other reference to the balance definition, which list_balances and get_resource name.
+ */
 export function maskBalanceNames(data: unknown): unknown {
   if (!isRow(data) || !Array.isArray(data.balances)) return data;
   return {
     ...data,
-    balances: data.balances.map(row =>
-      isRow(row) && !isNeutralAbsenceName(row.balance) ? { ...row, balance: ABSENCE_NAME } : row,
-    ),
+    balances: data.balances.map(row => {
+      if (!isRow(row)) return row;
+      if (isNeutralAbsenceName(row.balance)) return row;
+      const masked: Row = { balance: ABSENCE_NAME };
+      for (const field of MASKED_BALANCE_FIELDS) {
+        if (isPlainNumber(row[field])) masked[field] = row[field];
+      }
+      return masked;
+    }),
   };
 }

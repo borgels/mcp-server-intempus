@@ -1,6 +1,6 @@
 {
   "name": "mcp-server-intempus",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "mcpName": "io.github.borgels/mcp-server-intempus",
   "description": "MCP server for Visma Intempus (time registration, approval, balances, cases, planning) with employee, approver and admin profiles.",
   "type": "module",

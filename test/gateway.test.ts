@@ -735,6 +735,25 @@ describe('Intempus gateway personal data', () => {
     expect(JSON.stringify(definitions)).toContain('Sygdom');
   });
 
+  it('leaves no reference in a masked balance that list_balances or get_resource can link back', async () => {
+    const fake = absenceWorld();
+    fake.db.explored_employee_balance![1]!.balance = uri('balance', 21);
+    fake.db.explored_employee_balance![1]!.links = { definition: uri('balance', 21) };
+    const gw = gateway(fake);
+    const definitions = await gw.callTool('list_balances', {});
+    const sick = (data(definitions) as unknown as Array<{ id: number; name: string }>).find(row => row.name === 'Sygdom')!;
+    expect(sick.id).toBe(21);
+    const raw = await gw.callTool('get_resource', { resource: 'balance', id: 21 });
+    expect(data(raw).name).toBe('Sygdom');
+    const result = await gw.callTool('get_employee_balances', { employeeIds: [2], to: '2026-09-30' });
+    const rows = data(result).balances as Array<Record<string, unknown>>;
+    const masked = rows.find(row => row.balance === 'Absence')!;
+    expect(masked).toEqual({ balance: 'Absence', employeeId: 2, positive: 3, negative: 0, net: 3 });
+    expect(JSON.stringify(masked)).not.toMatch(/balance\/|balanceId|unit|21/);
+    // A neutral balance keeps its definition.
+    expect(rows.find(row => row.balance === 'Ferie')).toMatchObject({ balanceId: 20, unit: 'days' });
+  });
+
   it('leaves out private contact data and identity numbers, in views and raw rows', async () => {
     const fake = absenceWorld();
     const gw = gateway(fake);

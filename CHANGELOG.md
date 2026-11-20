@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.3
+
+- Gateway: a masked balance in `get_employee_balances` (named `Absence`)
+  keeps no reference to its definition. It is built from an allowlist of
+  fields (fail closed): the employee, `balance: "Absence"` and the numbers;
+  no `balanceId`, unit or anything else that `list_balances` or
+  `get_resource balance` could link back to. Neutral balances are unchanged.
+  The other masked views were checked for the same kind of link; masked time
+  registrations, planned work and schedules already keep no work type
+  reference (0.3.2). Catalog and MCP server unchanged.
+
 ## 0.3.2
 
 - Gateway: a masked absence entry (time registration, planned work,
