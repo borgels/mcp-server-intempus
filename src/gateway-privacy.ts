@@ -140,9 +140,13 @@ const fieldOf = (key: string): string => key.toLowerCase().replace(/[-_\s.]/g, '
 /** A text that points at a work type or work category (a resource URI such as /web/v1/work_type/53/). */
 const WORK_TYPE_REF = /work_?(type|category)\/\d/i;
 
-/** Whether a field is about the work type or category (its id, URI, name or an embedded object), or a category. */
+/**
+ * Whether a field is about the work type or a category: any field whose name, without case, `-`, `_`, spaces and
+ * dots, contains "worktype" or "category" (ids, URIs, names, pks, embedded objects: `work_type`, `worktype_name`,
+ * `workTypeId`, `category_name`, `category_pk`, `work_category` …).
+ */
 function isWorkTypeField(field: string): boolean {
-  return /^work(type|category)/.test(field) || field === 'category' || field.startsWith('categoryid');
+  return field.includes('worktype') || field.includes('category');
 }
 
 /**
