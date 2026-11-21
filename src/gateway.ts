@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod/v4';
-import { GATEWAY_FAILED_TEXT, gatewayErrorText, redactSecrets } from './errors.js';
+import { failureFrom, failureMetadata, GATEWAY_FAILED_TEXT, gatewayErrorText, redactSecrets, type FailureMetadata } from './errors.js';
 import { fixedOutputs, withheldResult } from './fallbacks.js';
 import { admitsKey, keyRefusedText, leaksSecret, sealedError } from './key-admission.js';
 import { writeAuditEvent } from './intempus/audit.js';
@@ -74,10 +74,19 @@ export interface GatewayToolDefinition {
   inputSchema: GatewayJsonObject;
 }
 
+/**
+ * Metadata about a failed call, on an error result whose cause is known: the HTTP status the upstream API answered
+ * with, and the vendor's own request id when a response header gives one as a UUID or hex id. For a host that counts
+ * failures without reading their text. Never the response body, the vendor's error code or message, or the input.
+ */
+export type GatewayFailure = FailureMetadata;
+
 export interface GatewayToolResult {
   content: Array<{ type: 'text'; text: string }>;
   structuredContent?: GatewayJsonValue;
   isError?: boolean;
+  /** On an error result from the upstream API only: its HTTP status and request id (see GatewayFailure). */
+  failure?: GatewayFailure;
 }
 
 /** Who and which request a call belongs to (written to the audit records of the call, the caller only as a pseudonym). */
@@ -659,7 +668,7 @@ function buildIntempusGateway(options: IntempusGatewayOptions, apiKey: string, r
         // data. An error result is our own text, and is redacted as a whole.
         () =>
           runCall(toolName, input).then(result => {
-            const final = result.isError ? (redactDeep(result, redactor) as GatewayToolResult) : result;
+            const final = withFailureInForm(result.isError ? (redactDeep(result, redactor) as GatewayToolResult) : result);
             // The sink check, as the very last step: a result that holds a piece of the key anywhere, outer fields
             // and the JSON text included, is withheld whole.
             return leaksSecret(final, redactor) ? withheldResult() : final;
@@ -713,7 +722,7 @@ function buildIntempusGateway(options: IntempusGatewayOptions, apiKey: string, r
       );
     } catch (error) {
       // Our own words only (src/errors.ts, gatewayErrorText): never the text of an Intempus answer.
-      return errorResult(redactSecrets(gatewayErrorText(error)));
+      return errorResult(redactSecrets(gatewayErrorText(error)), failureMetadata(error));
     }
   }
 }
@@ -837,9 +846,21 @@ function jsonResult(text: string, structuredContent: unknown): GatewayToolResult
   };
 }
 
-function errorResult(text: string): GatewayToolResult {
+function errorResult(text: string, failure?: GatewayFailure): GatewayToolResult {
   return {
     isError: true,
     content: [{ type: 'text', text }],
+    ...(failure ? { failure } : {}),
   };
+}
+
+/**
+ * The failure metadata as it must be after redaction: on an error result only, a status of 100-599 and a request id
+ * still in the form of one (redaction can have changed it). Anything else is dropped, never passed on.
+ */
+function withFailureInForm(result: GatewayToolResult): GatewayToolResult {
+  const { failure, ...rest } = result;
+  if (!result.isError || failure === undefined || failure === null || typeof failure !== 'object') return rest;
+  const checked = failureFrom(failure.httpStatus, failure.requestId);
+  return checked === undefined ? rest : { ...rest, failure: checked };
 }

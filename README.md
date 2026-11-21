@@ -146,7 +146,7 @@ The module exports:
   `INTEMPUS_OPERATION_SECRET`).
 - `gateway.tools` (the tools enabled on the instance) and
   `gateway.callTool(name, input, { caller, requestId })`, which returns
-  `{ content, structuredContent?, isError? }`. Names are accepted as the
+  `{ content, structuredContent?, isError?, failure? }`. Names are accepted as the
   gateway name (`list_cases`) or the MCP server name (`intempus_list_cases`),
   in any case. Input is validated with the tool's zod schema before anything
   is sent, and unknown fields are refused. The audit records of the call hold
@@ -264,7 +264,13 @@ response body (including its Danish validation messages), a redirect's
 `Location` or the configured address. An HTTP failure reads
 `Intempus API request failed with HTTP <status>`, followed by
 ` | <our hint>` and ` | retry-after=<seconds>s` where Intempus sends one, so a
-host can map it by status. The hints are fixed (400, 401, 403, 404, 405, 409,
+host can map it by status. Such a result also has
+`failure: { httpStatus, requestId? }`: the status, and the vendor's request
+id from a response header (`REQUEST_ID_HEADERS` in `src/errors.ts`) only when
+it is a hex id of 8 to 64 characters (one run of hex digits, or groups of
+four or more joined by single hyphens, as in a UUID) and does not hold the
+shape of a personal number, so a host can count failures without reading
+their text. The hints are fixed (400, 401, 403, 404, 405, 409,
 429, 500, 502, 503, 504, redirects). For a 400 the gateway compares the body
 with a short fixed list of known Intempus validation messages
 (`KNOWN_PROBLEMS` in `src/errors.ts`) and, on a match, uses our own text for
