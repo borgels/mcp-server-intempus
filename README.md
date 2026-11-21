@@ -349,3 +349,15 @@ that still holds a piece of the key is replaced by a fixed fallback.
 - The HTTP server does not terminate TLS. Run it behind a reverse proxy that
   does, or keep it on a private network.
 
+## License
+
+The code is source-available under the [Functional Source License, Version 1.1, ALv2 Future License](LICENSE) (FSL-1.1-ALv2).
+
+In plain words:
+
+- **Allowed:** reading the code, running it, changing it, using it inside your own organisation (also commercially), using it for non-commercial education and research, and contributing changes back.
+- **Not allowed:** making it, or something built from it, available to others as a commercial product or service that competes with it, for example a hosted service with the same functionality.
+- **Becomes Apache-2.0:** each version is also licensed under the Apache License 2.0 from two years after it is released.
+- **Earlier versions:** versions released before 0.5.0 were licensed under Apache-2.0 and remain so.
+
+The terms in [LICENSE](LICENSE) are what apply; this summary does not replace them. See also [NOTICE](NOTICE).
