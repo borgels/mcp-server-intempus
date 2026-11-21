@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+- Licensor and copyright holder corrected to Borgels Services ApS in `LICENSE`,
+  `NOTICE` and `CONTRIBUTING.md`. The license is unchanged (FSL-1.1-ALv2).
+
 ## 0.5.0
 
 - License changed from Apache-2.0 to the Functional Source License, Version 1.1,
