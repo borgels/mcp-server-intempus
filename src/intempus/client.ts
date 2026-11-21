@@ -1,5 +1,5 @@
 import { readEnvInteger } from '../config-env.js';
-import { IntempusHttpError, IntempusToolError, KNOWN_PROBLEMS } from '../errors.js';
+import { IntempusHttpError, IntempusToolError, KNOWN_PROBLEMS, requestIdFrom } from '../errors.js';
 
 export interface IntempusClientOptions {
   username?: string;
@@ -219,6 +219,7 @@ export class IntempusClient {
 
     const response = await this.fetchImpl(url, init);
     const retryAfter = response.headers.get('retry-after') ?? undefined;
+    const requestId = requestIdFrom(response.headers);
 
     if (response.status >= 300 && response.status < 400) {
       await response.body?.cancel().catch(() => undefined);
@@ -226,6 +227,7 @@ export class IntempusClient {
         status: response.status,
         url,
         retryAfter,
+        requestId,
         fallbackMessage: 'redirect not followed (check INTEMPUS_BASE_URL)',
         detail: this.errorDetail,
       });
@@ -244,7 +246,7 @@ export class IntempusClient {
       // key. A 400 body is only compared with a fixed list of known validation messages.
       const knownProblem = response.status === 400 ? await knownProblemOf(response) : undefined;
       await response.body?.cancel().catch(() => undefined);
-      throw new IntempusHttpError({ status: response.status, url, retryAfter, detail: false, knownProblem });
+      throw new IntempusHttpError({ status: response.status, url, retryAfter, requestId, detail: false, knownProblem });
     }
 
     const responseBody = await readBody(response);
@@ -255,6 +257,7 @@ export class IntempusClient {
         url,
         payload: responseBody,
         retryAfter,
+        requestId,
         fallbackMessage: response.status === 404 ? 'not found (or not visible to the API user)' : undefined,
       });
     }

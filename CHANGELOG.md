@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0
+
+- Gateway error results carry failure metadata: when the upstream API
+  answered with an HTTP error (a redirect that is not followed included), the result has `failure: { httpStatus,
+  requestId? }`, so a host can count failures by status without reading
+  their text. `requestId` is the vendor's own id from a response header
+  (`REQUEST_ID_HEADERS`), kept only when it is a hex id of 8 to 64
+  characters (one run of hex digits, or groups of four or more joined by
+  single hyphens, as in a UUID) and does not hold the shape of a personal
+  number. It is checked again after redaction, so an id that shared a piece
+  with the key is dropped. Never the body, the vendor's error code or
+  message. The shared helpers are in `src/errors.ts` (`vendorRequestId`,
+  `requestIdFrom`, `failureMetadata`).
+
 ## 0.3.3
 
 - Gateway: a masked balance in `get_employee_balances` (named `Absence`)
