@@ -62,6 +62,11 @@ export interface RegisterOptions {
   roles?: readonly IntempusRole[];
   /** Who the audit and creation ids name when there is no forwarded identity (the embeddable gateway). */
   actingAs?: string;
+  /**
+   * The embeddable gateway: finds the person's own employee for each call (from the host's actAs), instead of
+   * onBehalfOf. Called on every use, never cached here, and the address it uses is never the actingAs.
+   */
+  resolveSelf?: () => Promise<ResolvedEmployee>;
 }
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD');
@@ -92,6 +97,9 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
 
   let selfPromise: Promise<ResolvedEmployee> | undefined;
   const self = (): Promise<ResolvedEmployee> => {
+    if (options.resolveSelf) {
+      return options.resolveSelf();
+    }
     if (!options.onBehalfOf) {
       return Promise.reject(
         new Error('No requesting user identity available. This tool requires the gateway to forward the verified user (X-MCP-User).'),
@@ -134,7 +142,8 @@ export function registerIntempusTools(server: McpServer, client: IntempusClient,
       audited('intempus_search_capabilities', input, async () => {
         // In a gateway call only the tools that instance offers.
         const offered = currentOfferedTools();
-        const pool = offered ? new Set([...available].filter(name => offered.has(name))) : available;
+        // In a gateway call the tools that instance offers (its self tools included), else the roles' tools.
+        const pool = offered ? new Set(offered) : available;
         return jsonResult(searchCapabilities(input.query, input.limit, pool));
       }),
   );

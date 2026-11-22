@@ -91,14 +91,39 @@ export function identityMap(): Map<string, string> {
  * Resolve the gateway-verified user (UPN) to exactly one Intempus
  * employee: explicit identity map first, then username, then work email —
  * all case-insensitive. Zero or several matches fail closed; the private
- * `personal_email` field is never used for matching.
+ * `personal_email` field is never used for matching. With
+ * `identityMap: false` (the gateway, which reads no environment) the identity
+ * map is not consulted at all.
  */
-export async function resolveEmployee(client: IntempusClient, upn: string): Promise<ResolvedEmployee> {
+/**
+ * No employee, or more than one, matches the address. A class of its own, so the gateway can answer with a fixed
+ * refusal (src/act-as.ts, `no_user`) instead of this message, which quotes the address.
+ */
+export class EmployeeMatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EmployeeMatchError';
+  }
+}
+
+export async function resolveEmployee(
+  client: IntempusClient,
+  upn: string,
+  options: { identityMap?: boolean } = {},
+): Promise<ResolvedEmployee> {
   const wanted = upn.trim().toLowerCase();
   if (!wanted) {
     throw new Error('Empty user identity; the gateway must forward the verified user (X-MCP-User).');
   }
   const employees = await listEmployeesCached(client);
+
+  if (options.identityMap === false) {
+    // The gateway: one employee whose username or work email is the address, and no other employee with it in either
+    // field. Stricter than the order below, so two employees sharing the address are never told apart by field.
+    const matches = employees.filter(row => lower(row.username) === wanted || lower(row.email) === wanted);
+    const matchedBy = matches.length === 1 && lower(matches[0]!.username) === wanted ? 'username' : 'email';
+    return pickOne(client, upn, matches, matchedBy, 'Intempus username or work email');
+  }
 
   const mappedNumber = identityMap().get(wanted);
   if (mappedNumber !== undefined) {
@@ -123,13 +148,13 @@ function pickOne(
   source: string,
 ): ResolvedEmployee {
   if (matches.length === 0) {
-    throw new Error(
+    throw new EmployeeMatchError(
       `No Intempus employee matches ${upn}. An administrator must set the employee's Intempus username or work email to ` +
         'this sign-in address (or add it to INTEMPUS_IDENTITY_MAP) before self-service tools work.',
     );
   }
   if (matches.length > 1) {
-    throw new Error(
+    throw new EmployeeMatchError(
       `${matches.length} Intempus employees match ${upn} by ${source}; refusing to guess. An administrator must make it unique.`,
     );
   }

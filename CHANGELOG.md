@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.0
+
+- Gateway: acting as the person. The call context takes `actAs: { email,
+  name? }` (`src/act-as.ts`, the same contract as the template and
+  mcp-server-zammad), and a result can carry `actAsRefused` (`invalid`,
+  `no_user`, `not_permitted`) with a fixed text. A malformed `actAs` refuses
+  any call before anything is sent.
+- Gateway: the employee's self tools `get_my_profile`, `list_my_work_reports`,
+  `register_time`, `update_my_work_report`, `delete_my_work_report`,
+  `get_my_balances` and `get_my_planning`, marked `self: true` in the
+  catalog (a new field, false for the company-wide tools). They work only on
+  the one Intempus employee whose username or work email is the `actAs`
+  address (never the private email, never the identity map or the
+  environment); none or several give `no_user`, no `actAs` gives `invalid`,
+  and nothing is sent. `delete_my_work_report` is a write in the gateway: it
+  deletes only an own registration that is neither approved nor locked,
+  checked right before the delete. The address is never written to the
+  audit, a text of ours or Intempus. The company-wide tools are unchanged and
+  ignore `actAs`.
+- `search_capabilities` in a gateway call lists the tools the instance
+  offers, self tools included.
+
 ## 0.5.1
 
 - Licensor and copyright holder corrected to Borgels Services ApS in `LICENSE`,

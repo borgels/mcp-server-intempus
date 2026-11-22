@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { ActAs } from '../act-as.js';
 import type { SecretRedactor } from '../secret-redactor.js';
 
 /**
@@ -50,6 +51,11 @@ export interface CallContext {
    * own, generated per call.
    */
   requestId?: string;
+  /**
+   * The person the call is made for, as the host verified them (src/act-as.ts). Only the self tools use it: they find
+   * the person's own Intempus employee by the email and work on that employee only. Never written to the audit.
+   */
+  actAs?: ActAs;
 }
 
 /** What one gateway call runs under. */
@@ -61,6 +67,8 @@ export interface CallScope {
   readonly requestId?: string;
   /** The MCP server names of the tools the instance offers; search_capabilities lists only these. */
   readonly offeredTools: ReadonlySet<string>;
+  /** The host's actAs, checked (normaliseActAs); absent when the host gave none. */
+  readonly actAs?: Readonly<ActAs>;
 }
 
 const callScope = new AsyncLocalStorage<CallScope>();
@@ -142,4 +150,9 @@ export function currentCallContext(): CallContext {
 /** The tools the gateway instance whose call is in progress offers, or undefined (the MCP server). */
 export function currentOfferedTools(): ReadonlySet<string> | undefined {
   return callScope.getStore()?.offeredTools;
+}
+
+/** The checked actAs of the gateway call in progress, if the host gave one. */
+export function currentActAs(): Readonly<ActAs> | undefined {
+  return callScope.getStore()?.actAs;
 }
