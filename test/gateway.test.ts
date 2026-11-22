@@ -75,11 +75,30 @@ const EXPECTED_TOOLS: Array<[string, 'read' | 'write', boolean]> = [
   ['manage_contract', 'write', false],
   ['manage_user_access', 'write', false],
   ['manage_responsibility', 'write', false],
+  ['get_my_profile', 'read', false],
+  ['list_my_work_reports', 'read', false],
+  ['register_time', 'write', false],
+  ['update_my_work_report', 'write', false],
+  ['delete_my_work_report', 'write', false],
+  ['get_my_balances', 'read', false],
+  ['get_my_planning', 'read', false],
 ];
 
+/** The self tools: they act on the employee of the person in actAs only. */
+const SELF_TOOLS = ['get_my_profile', 'list_my_work_reports', 'register_time', 'update_my_work_report', 'delete_my_work_report', 'get_my_balances', 'get_my_planning'];
+
+/** Bo (employee 2): username bo123, work email Bo@Example.com, a private address that must never match. */
+const BO = { actAs: { email: 'bo@example.com' } };
+
 describe('Intempus gateway catalog', () => {
-  it('holds exactly the company-wide tools that need no identity, without the prefix', () => {
+  it('holds the company-wide tools and the self tools, without the prefix', () => {
     expect(intempusToolCatalog.map(entry => [entry.name, entry.riskLevel, entry.broad])).toEqual(EXPECTED_TOOLS);
+    expect(intempusToolCatalog.filter(entry => entry.self).map(entry => entry.name)).toEqual(SELF_TOOLS);
+    for (const entry of intempusToolCatalog) {
+      // A self tool never takes an employee id: it works on the person's own employee only.
+      if (entry.self) expect(Object.keys((entry.inputSchema.properties ?? {}) as object), entry.name).not.toContain('employeeId');
+      if (entry.self) expect(Object.keys((entry.inputSchema.properties ?? {}) as object), entry.name).not.toContain('employeeIds');
+    }
     for (const entry of intempusToolCatalog) {
       expect(entry.enabledByDefault).toBe(entry.riskLevel === 'read');
       expect(entry.name.startsWith('intempus_')).toBe(false);
@@ -90,10 +109,10 @@ describe('Intempus gateway catalog', () => {
       }
     }
     const names = intempusToolCatalog.map(entry => entry.name).join(' ');
-    for (const absent of ['whoami', 'my_', 'team', 'register_time', 'prepare_admin_change', 'commit_prepared_operation']) {
+    for (const absent of ['whoami', 'team', 'prepare_admin_change', 'commit_prepared_operation']) {
       expect(names).not.toContain(absent);
     }
-    const { upstream: _u, broad: _b, ...first } = intempusToolCatalog[1]!;
+    const { upstream: _u, broad: _b, self: _s, ...first } = intempusToolCatalog[1]!;
     expect(first).toEqual(intempusGatewayTools[1]);
   });
 
@@ -111,8 +130,8 @@ describe('Intempus gateway catalog', () => {
     }).toThrow(TypeError);
   });
 
-  it('shares its input schemas with the MCP server’s admin tools', async () => {
-    vi.stubEnv('INTEMPUS_PROFILE', 'admin');
+  it('shares its input schemas with the MCP server’s admin and employee tools', async () => {
+    vi.stubEnv('INTEMPUS_PROFILE', 'admin,employee');
     const server = createServer({ client: world().client() });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
@@ -196,6 +215,13 @@ const SAMPLE_INPUTS: Record<string, Array<Record<string, unknown>>> = {
     { action: 'unassign', targetType: 'employee', assignmentId: 800 },
     { action: 'remove_level', responsibleId: 700 },
   ],
+  get_my_profile: [{}],
+  list_my_work_reports: [{ from: '2026-09-01', to: '2026-09-30' }],
+  register_time: [{ date: '2026-09-29', workTypeId: 50, caseId: 60, hours: 2 }],
+  update_my_work_report: [{ workReportId: 900, hours: 6 }],
+  delete_my_work_report: [{ workReportId: 900 }],
+  get_my_balances: [{ to: '2026-09-30' }],
+  get_my_planning: [{}],
 };
 
 describe('Intempus gateway upstream requests', () => {
@@ -206,7 +232,7 @@ describe('Intempus gateway upstream requests', () => {
       for (const input of inputs!) {
         const fake = world();
         const gw = gateway(fake, { policy: { enableWrites: true } });
-        const result = await gw.callTool(entry.name, input as never);
+        const result = await gw.callTool(entry.name, input as never, entry.self ? BO : undefined);
         expect(result.isError, `${entry.name} ${JSON.stringify(input)}: ${text(result)}`).toBeUndefined();
         const declared = entry.upstream.map(op => `${op.method} ${op.path.replace('{resource}', String(input.resource))}`);
         for (const call of fake.calls) {
@@ -224,7 +250,8 @@ describe('Intempus gateway upstream requests', () => {
     const ids = (result.structuredContent as Array<{ id: string }>).map(capability => capability.id);
     expect(ids).toContain('intempus_list_cases');
     expect(ids).not.toContain('intempus_list_customers');
-    for (const absent of ['intempus_whoami', 'intempus_register_time', 'intempus_prepare_admin_change', 'intempus_commit_prepared_operation']) {
+    expect(ids).toContain('intempus_register_time');
+    for (const absent of ['intempus_whoami', 'intempus_list_team', 'intempus_prepare_admin_change', 'intempus_commit_prepared_operation']) {
       expect(ids).not.toContain(absent);
     }
   });
@@ -490,7 +517,7 @@ describe('Intempus gateway errors', () => {
     expect(text(unknownField)).toMatch(/^Invalid input for list_cases:/);
     const badDate = await gw.callTool('list_work_reports', { from: '29-09-2026' });
     expect(text(badDate)).toMatch(/^Invalid input for list_work_reports:/);
-    for (const name of ['whoami', 'intempus_register_time', 'prepare_admin_change', 'commit_prepared_operation', 'get_my_profile', KEY]) {
+    for (const name of ['whoami', 'prepare_admin_change', 'commit_prepared_operation', 'list_team', KEY]) {
       const result = await gw.callTool(name, {});
       expect(text(result), name).toBe('Unsupported Intempus gateway tool.');
     }

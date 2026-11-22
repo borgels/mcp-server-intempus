@@ -3,9 +3,12 @@ import { z } from 'zod/v4';
 import { failureFrom, failureMetadata, GATEWAY_FAILED_TEXT, gatewayErrorText, redactSecrets, type FailureMetadata } from './errors.js';
 import { fixedOutputs, withheldResult } from './fallbacks.js';
 import { admitsKey, keyRefusedText, leaksSecret, sealedError } from './key-admission.js';
+import { ActAsRefusedError, actAsRefusalInForm, normaliseActAs, type ActAs, type ActAsRefusal } from './act-as.js';
 import { writeAuditEvent } from './intempus/audit.js';
+import { EmployeeMatchError, resolveEmployee, type ResolvedEmployee } from './intempus/identity.js';
 import {
   canonicalToolName,
+  currentActAs,
   GatewayConfigError,
   resolveInstancePolicy,
   runInCallScope,
@@ -43,9 +46,16 @@ import {
  * host's `policy` instead; without one, writes are off and nothing is
  * audited), and not INTEMPUS_PROFILE, INTEMPUS_IDENTITY_MAP,
  * INTEMPUS_TRUST_FORWARDED_USER or INTEMPUS_OPERATION_SECRET. The host does
- * not know the person's Intempus employee, so the gateway offers only
- * company-wide tools that need no identity, run as the admin role, and not
- * the two-step irreversible changes (prepare/commit).
+ * company-wide tools run as the admin role. The self tools ("mine": the
+ * person's own profile, time registrations, balances and planning) run only
+ * for the person the host gives as `actAs` in the call context (see
+ * src/act-as.ts): the gateway finds exactly one Intempus employee whose
+ * username or work email is that address and works on that employee only;
+ * none or several refuse the call with `actAsRefused: 'no_user'`, a call
+ * without `actAs` with `'invalid'`, and nothing is sent. A self tool never
+ * takes an employee id and never falls back to the API user. The
+ * company-wide tools ignore `actAs`. Not here: whoami, the team tools and the
+ * two-step irreversible changes (prepare/commit).
  *
  * Every call runs in a call scope of its own (AsyncLocalStorage), so a call
  * made from inside another instance's call (from its audit sink or its fetch)
@@ -54,6 +64,12 @@ import {
 
 export type { AuditSink, InstancePolicy } from './intempus/call-scope.js';
 export { GatewayConfigError } from './intempus/call-scope.js';
+export { ACT_AS_REFUSALS, ACT_AS_TEXTS } from './act-as.js';
+
+/** The person a call is made for (GatewayCallContext.actAs; see src/act-as.ts). */
+export type GatewayActAs = ActAs;
+/** Why a call was not made as the person: `invalid` actAs, `no_user` in Intempus, or `not_permitted`. */
+export type GatewayActAsRefusal = ActAsRefusal;
 
 export type GatewayRiskLevel = 'read' | 'write' | 'destructive';
 export type GatewayJsonValue =
@@ -87,6 +103,12 @@ export interface GatewayToolResult {
   isError?: boolean;
   /** On an error result from the upstream API only: its HTTP status and request id (see GatewayFailure). */
   failure?: GatewayFailure;
+  /**
+   * On an error result only: the call was not made, because it could not be made as the person in `actAs` (a self
+   * tool without a valid `actAs`, or no single Intempus employee with the address). The text is fixed and never holds
+   * the email; nothing was sent.
+   */
+  actAsRefused?: GatewayActAsRefusal;
 }
 
 /** Who and which request a call belongs to (written to the audit records of the call, the caller only as a pseudonym). */
@@ -128,6 +150,11 @@ export interface GatewayToolCatalogEntry {
    * is broad: it reads any of a list of Intempus resources by name.
    */
   readonly broad: boolean;
+  /**
+   * True for a self tool: it works only on the Intempus employee of the person in `actAs` (found by username or work
+   * email) and is refused without one. False for the company-wide tools, which ignore `actAs`.
+   */
+  readonly self: boolean;
 }
 
 export interface IntempusGatewayOptions {
@@ -175,11 +202,13 @@ const REFERENCE_RESOURCES = [
 
 /**
  * The gateway's tools: the company-wide subset of the MCP server's admin
- * tools that needs no identity, with their own titles and descriptions. Not
- * here: whoami, the my_* and team_* tools and register_time (they act as the
- * signed-in person's own Intempus employee, which the host does not know),
+ * tools, and the employee's self tools (`self: true`), which act on the
+ * employee of the person in `actAs` only. Not here: whoami, the team_* tools
  * and prepare_admin_change / commit_prepared_operation (a two-step
- * confirmation the host has no tool for).
+ * confirmation the host has no tool for). The self tool
+ * delete_my_work_report is a write, not destructive: it deletes only the
+ * person's own registration while it is neither approved nor locked, checked
+ * right before the delete, like deleting a draft.
  */
 const GATEWAY_TOOLS: ReadonlyArray<{
   name: string;
@@ -190,6 +219,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
   summary: string;
   upstream: readonly GatewayUpstreamOperation[];
   broad?: boolean;
+  self?: boolean;
 }> = [
   {
     name: 'search_capabilities',
@@ -412,7 +442,86 @@ const GATEWAY_TOOLS: ReadonlyArray<{
       del('/responsible_for_case/{id}/'),
     ],
   },
+  {
+    name: 'get_my_profile',
+    title: 'My profile',
+    description: 'Your own Intempus employee record, contracts (work model, locked date) and the contract that covers today.',
+    riskLevel: 'read',
+    summary: 'Your Intempus profile.',
+    upstream: [get('/employee/'), get('/employee/{id}/')],
+    self: true,
+  },
+  {
+    name: 'list_my_work_reports',
+    title: 'My time registrations',
+    description:
+      'Your own time registrations in a period (default the last 31 days), with approval status and the total. Absence other than holiday or time off is shown as Absence, without its reason.',
+    riskLevel: 'read',
+    summary: 'Your Intempus time registrations.',
+    upstream: [get('/employee/'), get('/work_report/'), get('/work_type/')],
+    self: true,
+  },
+  {
+    name: 'register_time',
+    title: 'Register my time',
+    description:
+      'Register time for yourself: a work type, optionally a case, a date and either startTime and endTime (optionally breakHours) or hours. Checks your contract on the date, that the work type belongs to your work model, that the case is open and that the period is not locked. Pass idempotencyKey to make a retry safe.',
+    riskLevel: 'write',
+    summary: 'Your Intempus time registration saved.',
+    upstream: [get('/employee/'), get('/employee/{id}/'), get('/work_type/{id}/'), get('/work_type/'), get('/case/{id}/'), post('/work_report/')],
+    self: true,
+  },
+  {
+    name: 'update_my_work_report',
+    title: 'Correct my time registration',
+    description: 'Change one of your own time registrations, while it is neither approved nor locked.',
+    riskLevel: 'write',
+    summary: 'Your Intempus time registration saved.',
+    upstream: [
+      get('/employee/'),
+      get('/work_report/{id}/'),
+      get('/work_type/{id}/'),
+      get('/work_type/'),
+      get('/case/{id}/'),
+      patch('/work_report/{id}/'),
+    ],
+    self: true,
+  },
+  {
+    name: 'delete_my_work_report',
+    title: 'Delete my time registration',
+    description:
+      'Delete one of your own time registrations, only while it is neither approved nor locked (checked right before the delete).',
+    riskLevel: 'write',
+    summary: 'Your Intempus time registration deleted.',
+    upstream: [get('/employee/'), get('/work_report/{id}/'), get('/employee/{id}/'), del('/work_report/{id}/'), get('/work_type/')],
+    self: true,
+  },
+  {
+    name: 'get_my_balances',
+    title: 'My balances',
+    description:
+      'Your own balances that Intempus shows to employees (holiday, days off, time bank …) up to a date (default today). Balances other than holiday and time off are named Absence.',
+    riskLevel: 'read',
+    summary: 'Your Intempus balances.',
+    upstream: [get('/employee/'), get('/balance/'), get('/explored_employee_balance/')],
+    self: true,
+  },
+  {
+    name: 'get_my_planning',
+    title: 'My planning',
+    description: 'Your own planned work in a period (default the next 14 days). Planned absence other than holiday or time off has no remarks.',
+    riskLevel: 'read',
+    summary: 'Your Intempus planning.',
+    upstream: [get('/employee/'), get('/planned_work_report/'), get('/work_type/')],
+    self: true,
+  },
 ];
+
+/** The MCP server names of the self tools: their handlers act on the employee of the person in actAs. */
+const SELF_TOOL_NAMES: ReadonlySet<string> = new Set(
+  GATEWAY_TOOLS.filter(tool => tool.self === true).map(tool => canonicalToolName(tool.name)),
+);
 
 type RegisteredHandler = (input: Record<string, unknown>) => Promise<unknown>;
 interface RegisteredTool {
@@ -435,19 +544,44 @@ function strictSchema(inputSchema: unknown): z.ZodType {
 const GATEWAY_ACTOR = 'embedding host';
 
 /**
- * The MCP server's tools as registered for the admin role: the strict zod
- * input schema and the handler bound to `client`. Write tools are always
- * registered; the policy check refuses them unless the host enabled writes.
+ * The MCP server's tools as the gateway runs them: the company-wide tools as registered for the admin role, and the
+ * self tools as registered for the employee role, whose own employee comes from `resolveSelf` on every call. Each with
+ * the strict zod input schema and the handler bound to `client`. Write tools are always registered; the policy check
+ * refuses them unless the host enabled writes. The audit and the creation ids name GATEWAY_ACTOR, never the person.
  */
-function registeredTools(client: IntempusClient): Map<string, RegisteredTool> {
-  const tools = new Map<string, RegisteredTool>();
-  const server = {
+function registeredTools(client: IntempusClient, resolveSelf: () => Promise<ResolvedEmployee>): Map<string, RegisteredTool> {
+  const collect = (into: Map<string, RegisteredTool>) => ({
     registerTool(name: string, config: { inputSchema?: unknown }, handler: RegisteredHandler): void {
-      tools.set(name, { inputSchema: strictSchema(config.inputSchema), handler });
+      into.set(name, { inputSchema: strictSchema(config.inputSchema), handler });
     },
-  };
-  registerIntempusTools(server as never, client, { roles: ['admin'], actingAs: GATEWAY_ACTOR });
+  });
+  const tools = new Map<string, RegisteredTool>();
+  registerIntempusTools(collect(tools) as never, client, { roles: ['admin'], actingAs: GATEWAY_ACTOR });
+  const employee = new Map<string, RegisteredTool>();
+  registerIntempusTools(collect(employee) as never, client, { roles: ['employee'], actingAs: GATEWAY_ACTOR, resolveSelf });
+  for (const name of SELF_TOOL_NAMES) {
+    const tool = employee.get(name);
+    if (tool) tools.set(name, tool);
+  }
   return tools;
+}
+
+/**
+ * The person's own Intempus employee, for a self tool: exactly one employee whose username or work email is the
+ * address in the call's actAs (the identity map and the environment are not read). Without actAs the call is refused
+ * as `invalid`; none or several employees as `no_user`. The refusal never holds the address.
+ */
+function selfResolver(client: IntempusClient): () => Promise<ResolvedEmployee> {
+  return async () => {
+    const actAs = currentActAs();
+    if (!actAs) throw new ActAsRefusedError('invalid');
+    try {
+      return await resolveEmployee(client, actAs.email, { identityMap: false });
+    } catch (error) {
+      if (error instanceof EmployeeMatchError) throw new ActAsRefusedError('no_user');
+      throw error;
+    }
+  };
 }
 
 /**
@@ -481,6 +615,7 @@ const registeredName = (name: string): string => canonicalToolName(name);
 // Schemas only: registration binds the handlers to a client but never calls it.
 const schemas = registeredTools(
   new IntempusClient({ username: 'schema-only', apiKey: 'schema-only', fromEnvironment: false, timeoutMs: 1 }),
+  () => Promise.reject(new ActAsRefusedError('invalid')),
 );
 
 function definition(tool: (typeof GATEWAY_TOOLS)[number]): GatewayToolDefinition {
@@ -512,6 +647,7 @@ export const intempusToolCatalog: readonly GatewayToolCatalogEntry[] = deepFreez
     ...definition(tool),
     upstream: tool.upstream.map(operation => ({ ...operation })),
     broad: tool.broad === true,
+    self: tool.self === true,
   })),
 );
 
@@ -647,13 +783,21 @@ function buildIntempusGateway(options: IntempusGatewayOptions, apiKey: string, r
     ...(typeof options.fetchImpl === 'function' ? { fetchImpl: options.fetchImpl } : {}),
     ...(typeof options.maxRetryAfterSeconds === 'number' ? { maxRetryAfterSeconds: options.maxRetryAfterSeconds } : {}),
   });
-  const handlers = registeredTools(client);
+  const handlers = registeredTools(client, selfResolver(client));
   const offeredTools: ReadonlySet<string> = new Set(GATEWAY_TOOL_NAMES.filter(name => !policy.disabledTools.has(name)));
 
   return {
     /** Tools enabled on this instance (tools the host's policy disables are left out). */
     tools: intempusGatewayTools.filter(tool => !policy.disabledTools.has(registeredName(tool.name))),
     callTool(toolName: string, input: GatewayJsonObject = {}, context?: GatewayCallContext): Promise<GatewayToolResult> {
+      // The person to act as, checked before anything else: a malformed one refuses the call, so a self tool never
+      // runs for anyone else by mistake.
+      let actAs: Readonly<ActAs> | undefined;
+      try {
+        actAs = normaliseActAs(context?.actAs);
+      } catch {
+        return Promise.resolve(actAsRefused('invalid'));
+      }
       // Every call in a scope of its own.
       return runInCallScope(
         {
@@ -663,6 +807,7 @@ function buildIntempusGateway(options: IntempusGatewayOptions, apiKey: string, r
           // Our own id for the call: the host's request id is its text, and is not written to the audit.
           requestId: randomUUID(),
           offeredTools,
+          ...(actAs ? { actAs } : {}),
         },
         // A successful result is already redacted as data by normalizeResult, and its JSON text is built from that
         // data. An error result is our own text, and is redacted as a whole.
@@ -681,8 +826,18 @@ function buildIntempusGateway(options: IntempusGatewayOptions, apiKey: string, r
    * The fixed personal-data layer (src/gateway-privacy.ts), after the handler and before redaction: no private
    * contact data or identity numbers, and no sensitive absence reasons or balance names.
    */
-  async function protectPersonalData(name: string, data: unknown): Promise<unknown> {
+  async function protectPersonalData(tool: string, data: unknown): Promise<unknown> {
+    // A self tool's result has the shape of its company-wide equivalent and gets the same layer.
+    const name = PRIVACY_AS.get(tool) ?? tool;
     let out = withoutPrivateFields(data);
+    if (tool === 'intempus_delete_my_work_report') {
+      const row = (out as { workReport?: unknown } | null)?.workReport;
+      if (row !== undefined) {
+        const masked = maskAbsenceViews('intempus_manage_work_report', row, await sensitiveWorkTypes(client));
+        out = { ...(out as object), workReport: masked };
+      }
+      return out;
+    }
     if (ABSENCE_VIEW_TOOLS.has(name)) {
       out = maskAbsenceViews(name, out, await sensitiveWorkTypes(client));
     }
@@ -700,6 +855,12 @@ function buildIntempusGateway(options: IntempusGatewayOptions, apiKey: string, r
         // Neither the audit record nor the answer repeats the name: it is the caller's text, not ours.
         await writeAuditEvent({ tool: UNKNOWN_TOOL, action: 'rejected', reason: 'unsupported tool' });
         return errorResult('Unsupported Intempus gateway tool.');
+      }
+
+      // A self tool runs only for the person in actAs: without one nothing is read or sent.
+      if (SELF_TOOL_NAMES.has(name) && !currentActAs()) {
+        await writeAuditEvent({ tool: name, action: 'rejected', reason: 'no person to act as' });
+        return actAsRefused('invalid');
       }
 
       const parsed = tool.inputSchema.safeParse(input ?? {});
@@ -721,10 +882,26 @@ function buildIntempusGateway(options: IntempusGatewayOptions, apiKey: string, r
         protectPersonalData(name, data),
       );
     } catch (error) {
+      // Not made as the person: our fixed text and the refusal, never the address.
+      if (error instanceof ActAsRefusedError) return actAsRefused(error.refusal);
       // Our own words only (src/errors.ts, gatewayErrorText): never the text of an Intempus answer.
       return errorResult(redactSecrets(gatewayErrorText(error)), failureMetadata(error));
     }
   }
+}
+
+/** The company-wide tool whose personal-data layer a self tool's result gets (same result shape). */
+const PRIVACY_AS: ReadonlyMap<string, string> = new Map([
+  ['intempus_list_my_work_reports', 'intempus_list_work_reports'],
+  ['intempus_register_time', 'intempus_manage_work_report'],
+  ['intempus_update_my_work_report', 'intempus_manage_work_report'],
+  ['intempus_get_my_balances', 'intempus_get_employee_balances'],
+  ['intempus_get_my_planning', 'intempus_list_planned_work'],
+]);
+
+/** A call not made as the person: our fixed text and the refusal, nothing else. */
+function actAsRefused(refusal: ActAsRefusal): GatewayToolResult {
+  return { ...errorResult(new ActAsRefusedError(refusal).message), actAsRefused: refusal };
 }
 
 /** The audit's tool for a call to a tool this gateway does not have. */
@@ -859,7 +1036,10 @@ function errorResult(text: string, failure?: GatewayFailure): GatewayToolResult 
  * still in the form of one (redaction can have changed it). Anything else is dropped, never passed on.
  */
 function withFailureInForm(result: GatewayToolResult): GatewayToolResult {
-  const { failure, ...rest } = result;
+  const { failure, actAsRefused: refusal, ...withoutRefusal } = result;
+  // The refusal stays only on an error result, and only as one of ours.
+  const kept = result.isError ? actAsRefusalInForm(refusal) : undefined;
+  const rest: GatewayToolResult = kept ? { ...withoutRefusal, actAsRefused: kept } : withoutRefusal;
   if (!result.isError || failure === undefined || failure === null || typeof failure !== 'object') return rest;
   const checked = failureFrom(failure.httpStatus, failure.requestId);
   return checked === undefined ? rest : { ...rest, failure: checked };

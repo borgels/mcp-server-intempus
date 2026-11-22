@@ -145,8 +145,8 @@ The module exports:
   `INTEMPUS_IDENTITY_MAP`, `INTEMPUS_TRUST_FORWARDED_USER` or
   `INTEMPUS_OPERATION_SECRET`).
 - `gateway.tools` (the tools enabled on the instance) and
-  `gateway.callTool(name, input, { caller, requestId })`, which returns
-  `{ content, structuredContent?, isError?, failure? }`. Names are accepted as the
+  `gateway.callTool(name, input, { caller, requestId, actAs? })`, which returns
+  `{ content, structuredContent?, isError?, failure?, actAsRefused? }`. Names are accepted as the
   gateway name (`list_cases`) or the MCP server name (`intempus_list_cases`),
   in any case. Input is validated with the tool's zod schema before anything
   is sent, and unknown fields are refused. The audit records of the call hold
@@ -159,16 +159,16 @@ The module exports:
   the zod schema the call is validated with).
 - `intempusToolCatalog`: the same tools, deeply frozen, with `upstream`
   (method and path template of every Intempus request the tool may make,
-  relative to the base URL) and `broad` (true when the input chooses what
-  kind of thing is read). Hosts can build their own permission model from it
+  relative to the base URL), `broad` (true when the input chooses what
+  kind of thing is read) and `self` (true for a self tool, see below). Hosts can build their own permission model from it
   without creating an instance.
 - `GatewayConfigError` and the types (`IntempusGatewayOptions`,
   `IntempusGateway`, `InstancePolicy`, `AuditSink`, `GatewayToolDefinition`,
   `GatewayToolCatalogEntry`, `GatewayUpstreamOperation`, `GatewayToolResult`,
-  `GatewayCallContext` and the JSON types).
+  `GatewayCallContext`, `GatewayActAs`, `GatewayActAsRefusal` and the JSON
+  types), `ACT_AS_REFUSALS` and `ACT_AS_TEXTS`.
 
-The host does not know which Intempus employee a person is, so the gateway
-offers only company-wide tools that need no identity, run as the admin role:
+The company-wide tools run as the admin role and ignore `actAs`:
 
 | Tool | Risk | Default | Broad | Intempus requests |
 |---|---|---|---|---|
@@ -195,11 +195,51 @@ offers only company-wide tools that need no identity, run as the admin role:
 | `manage_user_access` | write | off | no | `GET /userprofile/`, `POST /userprofile/`, `PATCH /userprofile/{id}/`, `GET /employee/{id}/` |
 | `manage_responsibility` | write | off | no | `POST` and `DELETE` on `/responsible/` and `/responsible_for_{employee,department,case}/` |
 
+**Acting as the person (self tools, 0.6.0).** The host can give the person a
+call is made for as `actAs: { email, name? }` in the call context: an address
+the host has verified. The self tools (`self: true` in the catalog) work only
+on that person's own Intempus employee:
+
+| Tool | Risk | Default | Intempus requests |
+|---|---|---|---|
+| `get_my_profile` | read | on | `GET /employee/`, `GET /employee/{id}/` |
+| `list_my_work_reports` | read | on | `GET /employee/`, `GET /work_report/`, `GET /work_type/` |
+| `register_time` | write | off | `GET /employee/`, `GET /employee/{id}/`, `GET /work_type/{id}/`, `GET /work_type/`, `GET /case/{id}/`, `POST /work_report/` |
+| `update_my_work_report` | write | off | `GET /employee/`, `GET /work_report/{id}/`, `GET /work_type/{id}/`, `GET /work_type/`, `GET /case/{id}/`, `PATCH /work_report/{id}/` |
+| `delete_my_work_report` | write | off | `GET /employee/`, `GET /work_report/{id}/`, `GET /employee/{id}/`, `DELETE /work_report/{id}/`, `GET /work_type/` |
+| `get_my_balances` | read | on | `GET /employee/`, `GET /balance/`, `GET /explored_employee_balance/` |
+| `get_my_planning` | read | on | `GET /employee/`, `GET /planned_work_report/`, `GET /work_type/` |
+
+- **Exactly one employee.** The gateway reads the employees and takes the one
+  whose Intempus username or work email is the address, case-insensitive.
+  None, or more than one with the address in either field, refuses the call
+  with `actAsRefused: 'no_user'` and a fixed text; nothing more is read or
+  sent. The private `personal_email` never counts, and the identity map
+  (`INTEMPUS_IDENTITY_MAP`) and the rest of the environment are not read.
+- **No fallback.** A self tool without `actAs` is refused with
+  `actAsRefused: 'invalid'` before anything is read; so is any call with a
+  malformed `actAs` (`null`, not an object, not an email address). A self
+  tool never runs as the API user or for another employee: it takes no
+  employee id, and a time registration it corrects or deletes must belong
+  to the person, or it is answered as not found and nothing is changed.
+- **Deleting is a write, like deleting a draft.** `delete_my_work_report`
+  deletes only the person's own registration while it is neither approved
+  nor locked: the registration and the owner's contract (its locked date)
+  are read right before the delete.
+- **The address is only used to find the employee.** It is not written to
+  the audit (which has the host's `caller` as a pseudonym and `GATEWAY_ACTOR`
+  as the actor), not put in any text of ours and not written to Intempus;
+  the time registration's creation id is built from the actor and the
+  employee id. Intempus' own history still names the API user, which is why
+  the API user must be allowed to create, change and delete time
+  registrations in Intempus.
+- The self tools get the same personal-data layer as their company-wide
+  equivalents (absence reasons and sensitive balance names left out).
+
 The catalog holds the exact list; a test checks it against the requests each
 tool makes. `get_resource` is broad: it reads any resource of an allowlist by
-name. Not in the gateway: `whoami`, the self-service tools (`*_my_*`), the team
-tools (`list_team*`, `get_team_*`) and `register_time` (they act as the
-signed-in person's own Intempus employee), and `prepare_admin_change` / `commit_prepared_operation`
+name. Not in the gateway: `whoami`, the team tools (`list_team*`,
+`get_team_*`), and `prepare_admin_change` / `commit_prepared_operation`
 (irreversible deletes and period locks, which need a two-step confirmation
 the host has no tool for). They stay in the MCP server.
 
